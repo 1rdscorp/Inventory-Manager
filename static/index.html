@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventory Manager</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%232257c5'/%3E%3Cpath d='M12 5l6 3.2v7.6L12 19l-6-3.2V8.2z' fill='none' stroke='white' stroke-width='1.7' stroke-linejoin='round'/%3E%3Cpath d='M6 8.2l6 3.2 6-3.2M12 11.4V19' fill='none' stroke='white' stroke-width='1.7' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6"/><path d="M12 5l6 3.2v7.6L12 19l-6-3.2V8.2z"/><path d="M6 8.2l6 3.2 6-3.2M12 11.4V19"/></svg>
+    <span>Inventory Manager</span>
+  </div>
+  <nav class="tabs" aria-label="Sections">
+    <button type="button" class="tab" data-view="inventory" aria-current="page">Inventory</button>
+    <button type="button" class="tab" data-view="dashboard">Dashboard <span class="tab-badge" id="reorderBadge" hidden></span></button>
+    <button type="button" class="tab" data-view="activity">Activity</button>
+  </nav>
+  <div class="top-actions">
+    <button type="button" class="btn" id="importBtn">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m0 0l-3.5-3.5M10 12l3.5-3.5M4 14v2h12v-2"/></svg>Import
+    </button>
+    <details class="menu" id="exportMenu">
+      <summary class="btn">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 12V3m0 0L6.5 6.5M10 3l3.5 3.5M4 14v2h12v-2"/></svg>Export
+      </summary>
+      <div class="menu-list">
+        <a href="/api/export.xlsx" download>Excel workbook (.xlsx)<small>Inventory + activity log</small></a>
+        <a href="/api/export.csv" download>CSV file (.csv)<small>Inventory only</small></a>
+      </div>
+    </details>
+    <button type="button" class="btn btn-primary" id="addBtn">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>Add item
+    </button>
+  </div>
+</header>
+
+<main>
+  <!-- ============ Inventory ============ -->
+  <section class="view" id="view-inventory">
+    <div class="toolbar">
+      <label class="search">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M13.2 13.2L17 17"/></svg>
+        <span class="sr-only">Search inventory</span>
+        <input id="search" type="search" placeholder="Search SKU, name, category, location, supplier, notes…" autocomplete="off" spellcheck="false">
+        <kbd title="Press / to search">/</kbd>
+      </label>
+      <select id="fCategory" aria-label="Filter by category"><option value="">All categories</option></select>
+      <select id="fLocation" aria-label="Filter by location"><option value="">All locations</option></select>
+      <select id="fStatus" aria-label="Filter by status">
+        <option value="">Any status</option>
+        <option value="Reorder">Needs reorder</option>
+        <option value="Out">Out of stock</option>
+        <option value="OK">OK</option>
+      </select>
+    </div>
+    <div class="summary" id="summary" aria-live="polite"></div>
+    <div class="table-wrap">
+      <table class="grid" id="itemsTable">
+        <thead>
+          <tr>
+            <th data-sort="sku"><button type="button">SKU</button></th>
+            <th data-sort="name"><button type="button">Item name</button></th>
+            <th data-sort="category"><button type="button">Category</button></th>
+            <th data-sort="location" class="hide-sm"><button type="button">Location</button></th>
+            <th data-sort="supplier" class="hide-sm"><button type="button">Supplier</button></th>
+            <th data-sort="quantity" class="num"><button type="button">Qty</button></th>
+            <th data-sort="reorder_level" class="num hide-sm"><button type="button">Reorder at</button></th>
+            <th data-sort="unit_cost" class="num hide-sm"><button type="button">Unit cost</button></th>
+            <th data-sort="unit_price" class="num hide-sm"><button type="button">Unit price</button></th>
+            <th data-sort="total_value" class="num"><button type="button">Total value</button></th>
+            <th data-sort="status"><button type="button">Status</button></th>
+            <th class="col-actions"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty" id="emptyState" hidden></div>
+    </div>
+  </section>
+
+  <!-- ============ Dashboard ============ -->
+  <section class="view" id="view-dashboard" hidden>
+    <div class="kpis" id="kpis"></div>
+    <div class="dash-grid">
+      <section class="panel">
+        <header class="panel-head">
+          <h2>Items needing reorder</h2>
+          <span class="muted" id="reorderCount"></span>
+        </header>
+        <div class="table-wrap flat">
+          <table class="grid" id="reorderTable">
+            <thead>
+              <tr>
+                <th>SKU</th><th>Item name</th><th class="hide-sm">Supplier</th>
+                <th class="num">On hand</th><th class="num">Reorder at</th><th class="col-actions"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="empty small" id="reorderEmpty" hidden>Everything is above its reorder level.</div>
+        </div>
+      </section>
+      <section class="panel">
+        <header class="panel-head">
+          <h2>Stock value by category</h2>
+          <span class="muted">at unit cost</span>
+        </header>
+        <div class="bars" id="catBars"></div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ============ Activity ============ -->
+  <section class="view" id="view-activity" hidden>
+    <div class="toolbar">
+      <label class="search">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M13.2 13.2L17 17"/></svg>
+        <span class="sr-only">Search activity</span>
+        <input id="actSearch" type="search" placeholder="Search activity by SKU, item or note…" autocomplete="off" spellcheck="false">
+      </label>
+      <select id="actKind" aria-label="Filter by type">
+        <option value="">All types</option>
+        <option value="received">Received</option>
+        <option value="removed">Removed</option>
+        <option value="counted">Count</option>
+        <option value="edited">Edited</option>
+        <option value="created">Created</option>
+        <option value="imported">Imported</option>
+        <option value="deleted">Deleted</option>
+      </select>
+    </div>
+    <div class="summary" id="actSummary"></div>
+    <div class="table-wrap">
+      <table class="grid" id="actTable">
+        <thead>
+          <tr>
+            <th>When</th><th>SKU</th><th>Item name</th><th>Type</th>
+            <th class="num">Change</th><th class="num">On hand after</th><th class="hide-sm">Note</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty" id="actEmpty" hidden></div>
+    </div>
+  </section>
+</main>
+
+<datalist id="dlCategories"></datalist>
+<datalist id="dlLocations"></datalist>
+<datalist id="dlSuppliers"></datalist>
+
+<!-- ============ Item dialog ============ -->
+<dialog class="dlg dlg-wide" id="itemDialog" aria-labelledby="itemDialogTitle">
+  <form id="itemForm" novalidate>
+    <header class="dlg-head">
+      <h2 id="itemDialogTitle">Add item</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Close">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+      </button>
+    </header>
+    <div class="dlg-body">
+      <div class="form-grid">
+        <label class="field c4"><span>SKU <em>*</em></span><input name="sku" required maxlength="64" autocomplete="off" spellcheck="false"></label>
+        <label class="field c8"><span>Item name <em>*</em></span><input name="name" required maxlength="200" autocomplete="off"></label>
+        <label class="field c4"><span>Category</span><input name="category" list="dlCategories" maxlength="80" autocomplete="off"></label>
+        <label class="field c4"><span>Location</span><input name="location" list="dlLocations" maxlength="80" autocomplete="off"></label>
+        <label class="field c4"><span>Supplier</span><input name="supplier" list="dlSuppliers" maxlength="120" autocomplete="off"></label>
+        <label class="field c3"><span>Quantity</span><input name="quantity" type="number" min="0" step="any" inputmode="decimal" placeholder="0"></label>
+        <label class="field c3"><span>Reorder level</span><input name="reorder_level" type="number" min="0" step="any" inputmode="decimal" placeholder="0"></label>
+        <label class="field c3"><span>Unit cost ($)</span><input name="unit_cost" type="number" min="0" step="any" inputmode="decimal" placeholder="0.00"></label>
+        <label class="field c3"><span>Unit price ($)</span><input name="unit_price" type="number" min="0" step="any" inputmode="decimal" placeholder="0.00"></label>
+        <label class="field c12"><span>Notes</span><textarea name="notes" rows="2" maxlength="2000"></textarea></label>
+      </div>
+      <div class="calc" id="itemCalc"></div>
+      <div class="form-error" id="itemError" role="alert" hidden></div>
+      <section class="history" id="itemHistory" hidden>
+        <h3>Stock history</h3>
+        <ol class="history-list" id="itemHistoryList"></ol>
+      </section>
+    </div>
+    <footer class="dlg-foot">
+      <button type="button" class="btn btn-danger" id="deleteItemBtn" hidden>Delete</button>
+      <button type="button" class="btn btn-ghost" id="adjustFromItemBtn" hidden>Adjust stock</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="submit" class="btn btn-primary" id="saveItemBtn">Save item</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- ============ Adjust stock dialog ============ -->
+<dialog class="dlg" id="adjustDialog" aria-labelledby="adjustTitle">
+  <form id="adjustForm" novalidate>
+    <header class="dlg-head">
+      <h2 id="adjustTitle">Adjust stock</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Close">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+      </button>
+    </header>
+    <div class="dlg-body">
+      <div class="adj-item">
+        <div class="adj-name" id="adjName"></div>
+        <div class="adj-sub" id="adjSub"></div>
+      </div>
+      <div class="segmented" role="radiogroup" aria-label="Adjustment type">
+        <label><input type="radio" name="mode" value="add" checked><span>Receive</span></label>
+        <label><input type="radio" name="mode" value="remove"><span>Remove</span></label>
+        <label><input type="radio" name="mode" value="set"><span>Set count</span></label>
+      </div>
+      <label class="field"><span id="adjAmountLabel">Quantity received</span><input name="amount" type="number" min="0" step="any" inputmode="decimal" required></label>
+      <label class="field"><span>Note <i>(optional)</i></span><input name="note" maxlength="300" autocomplete="off" placeholder="e.g. PO #1042, damaged, stocktake"></label>
+      <div class="adj-preview" id="adjPreview"></div>
+      <div class="form-error" id="adjError" role="alert" hidden></div>
+    </div>
+    <footer class="dlg-foot">
+      <span class="spacer"></span>
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="submit" class="btn btn-primary">Apply</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- ============ Import dialog ============ -->
+<dialog class="dlg" id="importDialog" aria-labelledby="importTitle">
+  <form id="importForm" novalidate>
+    <header class="dlg-head">
+      <h2 id="importTitle">Import from a spreadsheet</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Close">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+      </button>
+    </header>
+    <div class="dlg-body">
+      <p class="muted">Choose an Excel (.xlsx) or CSV file. Columns are matched by their headings — the sheet needs at least <b>SKU</b> and <b>Item Name</b>; Category, Location, Supplier, Quantity, Reorder Level, Unit Cost, Unit Price and Notes are picked up when present.</p>
+      <label class="file-pick">
+        <input type="file" id="importFile" accept=".xlsx,.xlsm,.csv,text/csv">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 2.5h5.5L15 6v11.5H6z"/><path d="M11 2.5V6.5h4"/></svg>
+        <span id="importFileLabel">Choose a file…</span>
+      </label>
+      <fieldset class="radio-list">
+        <legend class="sr-only">Import mode</legend>
+        <label><input type="radio" name="importMode" value="merge" checked><span><b>Merge</b> — update items with matching SKUs and add new ones</span></label>
+        <label><input type="radio" name="importMode" value="replace"><span><b>Replace</b> — remove every current item, then import the file</span></label>
+      </fieldset>
+      <div class="import-preview" id="importPreview" hidden></div>
+      <div class="form-error" id="importError" role="alert" hidden></div>
+    </div>
+    <footer class="dlg-foot">
+      <span class="spacer"></span>
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="submit" class="btn btn-primary" id="importSubmit" disabled>Import</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- ============ Confirm dialog ============ -->
+<dialog class="dlg dlg-narrow" id="confirmDialog" aria-labelledby="confirmTitle">
+  <form method="dialog">
+    <header class="dlg-head"><h2 id="confirmTitle">Are you sure?</h2></header>
+    <div class="dlg-body"><p id="confirmMsg"></p></div>
+    <footer class="dlg-foot">
+      <span class="spacer"></span>
+      <button type="submit" class="btn" value="cancel">Cancel</button>
+      <button type="submit" class="btn btn-primary" value="ok" id="confirmOk">OK</button>
+    </footer>
+  </form>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

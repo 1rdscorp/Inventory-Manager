@@ -1,0 +1,17 @@
+# Live database - your day-to-day inventory, kept out of version control
+data/
+
+# Build output and build tools (recreated by build_exe.bat)
+build/
+dist/
+*.exe
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+
+# Local editor/tool settings
+.claude/
+.vscode/
+.idea/
