@@ -33,6 +33,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 APP_ID = "inventory-manager"
 FROZEN = getattr(sys, "frozen", False)  # True when running as "Inventory Manager.exe"
+# The exe is built without a terminal window; it then has no console to print to and
+# runs from an icon in the Windows system tray instead (next to the clock).
+NO_CONSOLE = sys.stdout is None
 if FROZEN:
     # Data sits next to the .exe; the web page files are unpacked into a temp folder.
     APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
@@ -976,8 +979,60 @@ def _already_running(port):
         return False
 
 
+def _message_box(message, error=False):
+    """Show a Windows message box (used when there is no console window)."""
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, message, "Inventory Manager", 0x10 if error else 0x40)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _tray_image():
+    from PIL import Image
+    try:
+        return Image.open(os.path.join(RESOURCE_DIR, "app.ico"))
+    except OSError:
+        return Image.new("RGB", (64, 64), (34, 87, 197))
+
+
+def _run_in_tray(server, url, note):
+    """Serve in the background; a tray icon offers Open and Quit. Returns after Quit."""
+    import pystray
+
+    def open_app(icon, item):
+        webbrowser.open(url)
+
+    def quit_app(icon, item):
+        icon.stop()
+
+    icon = pystray.Icon(
+        APP_ID, _tray_image(), "Inventory Manager",
+        menu=pystray.Menu(
+            pystray.MenuItem("Open Inventory Manager", open_app, default=True),
+            pystray.MenuItem("Quit", quit_app),
+        ),
+    )
+
+    def setup(icon):
+        icon.visible = True
+        try:
+            icon.notify(note, "Inventory Manager is running")
+        except Exception:  # noqa: BLE001
+            pass
+
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        icon.run(setup=setup)
+    finally:
+        server.shutdown()
+
+
 def _fail(message):
     """Show a startup error; when run as an .exe, keep the window open so it can be read."""
+    if NO_CONSOLE:
+        _message_box(message, error=True)
+        sys.exit(1)
     print(message)
     if FROZEN:
         try:
@@ -1015,7 +1070,7 @@ def main():
                 if not args.no_browser:
                     print("Opening it in your browser...")
                     webbrowser.open(url)
-                    if FROZEN:
+                    if FROZEN and not NO_CONSOLE:
                         threading.Event().wait(3)  # let the message be seen before the window closes
                 return
     if server is None:
@@ -1026,14 +1081,32 @@ def main():
     except (sqlite3.Error, OSError) as e:
         _fail(f"Couldn't open the data file {os.path.abspath(args.db)}:\n  {e}")
     server.store = store
+    seed_note = ""
     try:
         summary = store.seed_from_file(SEED_FILE)
         if summary:
-            print(f"First run: imported {summary['added']} items from {os.path.basename(SEED_FILE)}.")
+            seed_note = f"First run: imported {summary['added']} items from {os.path.basename(SEED_FILE)}."
     except Exception as e:  # noqa: BLE001
-        print(f"Note: couldn't import {os.path.basename(SEED_FILE)} on first run: {e}")
+        seed_note = f"Note: couldn't import {os.path.basename(SEED_FILE)} on first run: {e}"
+    if seed_note:
+        print(seed_note)
 
     url = f"http://127.0.0.1:{server.server_address[1]}/"
+    if NO_CONSOLE:
+        if not args.no_browser:
+            threading.Timer(0.5, webbrowser.open, [url]).start()
+        note = "Right-click the box icon by the clock to open or quit."
+        if seed_note:
+            note = seed_note + "\n" + note
+        try:
+            _run_in_tray(server, url, note)
+        except Exception as e:  # noqa: BLE001
+            _fail(f"Couldn't create the tray icon, so the app was stopped:\n{e}")
+        finally:
+            server.server_close()
+            store.close()
+        return
+
     print("")
     print("  Inventory Manager is running")
     print(f"  Open {url} in your browser")

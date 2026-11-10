@@ -8,18 +8,21 @@ The `.exe` isn't stored in the repository's files. Download **`Inventory-Manager
 
 ## Start it
 
-Double-click **`Inventory Manager.exe`** (or `Inventory-Manager.exe` if you downloaded it from Releases). A small window opens and your browser goes to <http://127.0.0.1:8765/>.
-Keep that window open while you use the app (you can minimize it), and close it to stop the app. If you double-click the `.exe` while the app is already running, it just opens the browser again.
+Double-click **`Inventory Manager.exe`** (or `Inventory-Manager.exe` if you downloaded it from Releases). Your browser goes to <http://127.0.0.1:8765/>, and a blue box icon appears in the system tray by the clock. No window stays open.
+
+- **Open it again** after closing the browser tab: double-click the tray icon, or right-click it → **Open Inventory Manager**. Double-clicking the `.exe` again does the same.
+- **Stop the app:** right-click the tray icon → **Quit**.
+- **Can't see the icon?** Windows may tuck it under the **^** arrow next to the clock. To keep it visible, drag it from there onto the taskbar.
 
 - **Windows warning on first launch:** the `.exe` isn't digitally signed, so Windows may show *"Windows protected your PC"*. Click **More info → Run anyway**. You only have to do this once.
 - **Desktop shortcut:** right-click `Inventory Manager.exe` → **Show more options → Send to → Desktop (create shortcut)**.
 - **Keep the exe in this folder.** It stores its data in the `data` folder next to it. If you move the app to another folder or computer, move `Inventory Manager.exe` *and* the `data` folder together.
 
-Other ways to start it, if you ever need them: `Start Inventory Manager.bat`, or `python server.py` from a terminal. Both use the same data.
+Other ways to start it, if you ever need them: `Start Inventory Manager.bat`, or `python server.py` from a terminal. Both use the same data. These run in a terminal window instead of the tray; close the window to stop.
 
 ## Rebuilding the exe
 
-The exe is built from `server.py` and the `static` folder. After changing either one, close the app and double-click **`build_exe.bat`**. The first build downloads the build tools (PyInstaller) into the `build` folder, which is safe to delete; it is recreated when needed. `packaging` holds the icon and version details.
+The exe is built from `server.py` and the `static` folder. After changing either one, quit the app (tray icon → **Quit**) and double-click **`build_exe.bat`**. The first build downloads the build tools (PyInstaller, Pillow and pystray) into the `build` folder, which is safe to delete; it is recreated when needed. `packaging` holds the icon and version details.
 
 On first run, the app copies every item from `inventory_management.xlsx` into its own database. After that the spreadsheet isn't changed or read again; the app is where your inventory lives.
 
@@ -36,7 +39,7 @@ On first run, the app copies every item from `inventory_management.xlsx` into it
 
 ## Your data
 
-Everything is stored in `data\inventory.db`. To back it up, copy that file, or use **Export → Excel workbook**. To start over from the spreadsheet, close the app, delete `data\inventory.db`, and start the app again.
+Everything is stored in `data\inventory.db`. To back it up, copy that file, or use **Export → Excel workbook**. To start over from the spreadsheet, quit the app, delete `data\inventory.db`, and start the app again.
 
 ## Options
 
