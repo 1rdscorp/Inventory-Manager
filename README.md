@@ -1,51 +1,76 @@
 # Inventory Manager
 
-A searchable inventory app built from `inventory_management.xlsx`. It runs on this computer and opens in your web browser. It doesn't need internet access, and the `.exe` doesn't need Python either.
+A searchable inventory app for Windows, built from `inventory_management.xlsx`. It's written in C++ and installs like any other Windows program. It runs in its own window, works without internet access, and keeps your data on your computer.
 
-## Get the app
+## Install
 
-The `.exe` isn't stored in the repository's files. Download **`Inventory-Manager.exe`** from this repository's **Releases** page and put it in this folder, next to `inventory_management.xlsx`. Or build it yourself with `build_exe.bat` (see *Rebuilding the exe*).
+1. Download **`InventoryManager-Setup-2.0.0.exe`** from this repository's **Releases** page (or build it yourself; see below).
+2. Double-click it and follow the steps. No administrator rights are needed: it installs for your Windows account. To install it for everyone on the PC, choose that option in the first screen of the setup wizard.
+3. Start **Inventory Manager** from the Start menu or the desktop shortcut.
 
-## Start it
+The first time it runs, it imports the items from the bundled `inventory_management.xlsx`.
 
-Double-click **`Inventory Manager.exe`** (or `Inventory-Manager.exe` if you downloaded it from Releases). A small window opens and your browser goes to <http://127.0.0.1:8765/>.
-Keep that window open while you use the app (you can minimize it), and close it to stop the app. If you double-click the `.exe` while the app is already running, it just opens the browser again.
-
-- **Windows warning on first launch:** the `.exe` isn't digitally signed, so Windows may show *"Windows protected your PC"*. Click **More info → Run anyway**. You only have to do this once.
-- **Desktop shortcut:** right-click `Inventory Manager.exe` → **Show more options → Send to → Desktop (create shortcut)**.
-- **Keep the exe in this folder.** It stores its data in the `data` folder next to it. If you move the app to another folder or computer, move `Inventory Manager.exe` *and* the `data` folder together.
-
-Other ways to start it, if you ever need them: `Start Inventory Manager.bat`, or `python server.py` from a terminal. Both use the same data.
-
-## Rebuilding the exe
-
-The exe is built from `server.py` and the `static` folder. After changing either one, close the app and double-click **`build_exe.bat`**. The first build downloads the build tools (PyInstaller) into the `build` folder, which is safe to delete; it is recreated when needed. `packaging` holds the icon and version details.
-
-On first run, the app copies every item from `inventory_management.xlsx` into its own database. After that the spreadsheet isn't changed or read again; the app is where your inventory lives.
+- **Windows warning:** the installer isn't digitally signed, so Windows may show *"Windows protected your PC"*. Click **More info → Run anyway**.
+- **Requirements:** Windows 10 or 11, 64-bit. The app window uses the Microsoft Edge WebView2 Runtime, which comes with Windows 11 and with current Windows 10. If it's missing, the app opens in your web browser instead.
+- **Uninstall:** use **Settings → Apps → Installed apps → Inventory Manager → Uninstall**. Your inventory data is kept (see below), so reinstalling or upgrading never loses it.
 
 ## What it does
 
-- **Search**: type in the search box (press <kbd>/</kbd> to jump there). Results update as you type and match SKU, item name, category, location, supplier and notes. Several words narrow the results (`aisle 3 hub`). Matches are highlighted.
+- **Search**: results update as you type and match SKU, item name, category, location, supplier and notes. Several words narrow the results (`aisle 3 hub`). Press <kbd>/</kbd> to jump to the search box.
 - **Filter and sort**: filter by category, location or status (Needs reorder / Out of stock / OK), and click any column heading to sort.
 - **Add, edit and delete items**: click a row to edit it. *Total value* (Quantity × Unit Cost) and *Status* ("Reorder" when Quantity ≤ Reorder Level) are calculated the same way as in the spreadsheet.
-- **Adjust stock**: the **Adjust** button on each row lets you *Receive* (+), *Remove* (−) or *Set count* (stocktake), with an optional note such as a PO number.
-- **Dashboard**: totals (SKUs, units, stock value, retail value), the list of items needing reorder grouped by supplier, and stock value by category.
-- **Activity**: a searchable log of every stock change (received, removed, counted, edited, imported, deleted).
+- **Adjust stock**: the **Adjust** button lets you *Receive* (+), *Remove* (−) or *Set count* (stocktake), with an optional note such as a PO number.
+- **Dashboard**: totals, items needing reorder grouped by supplier, and stock value by category.
+- **Activity**: a searchable log of every stock change.
 - **Import**: load an `.xlsx` or `.csv` file. Columns are matched by heading, and you see a preview of what will change before anything is saved. *Merge* updates matching SKUs and adds new ones; *Replace* swaps out the whole inventory.
-- **Export**: download an Excel workbook (Inventory and Activity sheets, with live Total Value and Status formulas) or a CSV file.
+- **Export**: download an Excel workbook (Inventory and Activity sheets, with live formulas) or a CSV file. Files go to your Downloads folder.
 
 ## Your data
 
-Everything is stored in `data\inventory.db`. To back it up, copy that file, or use **Export → Excel workbook**. To start over from the spreadsheet, close the app, delete `data\inventory.db`, and start the app again.
+Your inventory is stored in **`%LOCALAPPDATA%\Inventory Manager\inventory.db`**; paste that into File Explorer's address bar to open the folder. To back it up, copy that file, or use **Export → Excel workbook**. To start over from the spreadsheet, close the app, delete `inventory.db`, and open the app again.
 
-## Options
-
-These work with the exe (from a terminal or in a shortcut's *Target*) and with `python server.py`:
+Advanced options, added to the shortcut's *Target* after the closing quote:
 
 ```
-"Inventory Manager.exe" --port 9000       # use a different port
-"Inventory Manager.exe" --host 0.0.0.0    # let other computers on your network open it
-"Inventory Manager.exe" --no-browser      # don't open a browser window automatically
+--db "D:\Shared\inventory.db"   use a different data file
+--browser                       open in your web browser instead of the app window
+--host 0.0.0.0 --port 8765      also let other computers on your network open http://<this-PC>:8765/
 ```
 
-With `--host 0.0.0.0`, Windows Firewall will ask whether to allow access; choose *Private networks*. Anyone on your network who can reach this computer can view and change the inventory, because there are no logins. Use it only on a network you trust.
+With `--host 0.0.0.0` there are no logins, so anyone on your network can view and change the inventory. Use it only on a network you trust.
+
+## Building from source
+
+Requirements:
+- **Build Tools for Visual Studio 2022 or newer**, with *Desktop development with C++*
+- **Inno Setup 6** (<https://jrsoftware.org/isdl.php>), only needed for the installer
+- Internet access on the first build
+
+Then double-click **`build.bat`**. It produces:
+
+- `build\InventoryManager.exe`, the app (one file, no runtime needed)
+- `build\installer\InventoryManager-Setup-<version>.exe`, the installer
+
+Third-party libraries are downloaded by CMake and checked against fixed SHA-256 hashes:
+
+- [cpp-httplib](https://github.com/yhirose/cpp-httplib): local web server
+- [SQLite](https://sqlite.org): database
+- [nlohmann/json](https://github.com/nlohmann/json): JSON
+- [pugixml](https://pugixml.org): reading Excel files
+- [miniz](https://github.com/richgel999/miniz): .xlsx zip files
+- [WebView2 SDK](https://www.nuget.org/packages/Microsoft.Web.WebView2): app window
+
+### Project layout
+
+| Path | What it is |
+| --- | --- |
+| `src/main.cpp` | Windows app: window, WebView2, single instance, command-line options |
+| `src/server.cpp` | Local HTTP API used by the app's pages |
+| `src/store.cpp` | SQLite storage, stock adjustments, import logic |
+| `src/spreadsheet.cpp` | Reading and writing .xlsx and .csv files |
+| `src/util.cpp` | Shared helpers: validation, numbers, text |
+| `static/` | The app's pages (HTML/CSS/JS), built into the .exe |
+| `installer/InventoryManager.iss` | Inno Setup installer script |
+| `packaging/` | App icon (`make_icon.py` regenerates it; needs Python and Pillow) |
+
+Version 1.0.0 was a Python version. It's still in the git history and on the v1.0.0 release.
