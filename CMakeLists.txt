@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(InventoryManager VERSION 2.0.0 LANGUAGES C CXX)
+project(InventoryManager VERSION 2.1.0 LANGUAGES C CXX)
 
 if(NOT MSVC)
   message(FATAL_ERROR "Build with the Microsoft C++ compiler (run build.bat, or use a Visual Studio developer prompt).")

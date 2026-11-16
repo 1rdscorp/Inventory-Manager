@@ -46,6 +46,7 @@ using Record = std::map<std::string, Value>;
 
 struct Item {
     std::string sku, name, category, location, supplier, notes;
+    std::string manufacturer, manufacturer_url, datasheet_url;
     double quantity = 0, reorder_level = 0, unit_cost = 0, unit_price = 0;
 };
 
@@ -63,5 +64,7 @@ std::string utf8_prefix(const std::string& s, size_t max_chars);
 
 double parse_number(const Value& v, const std::string& label);
 std::string clean_text(const Value& v, const std::string& key);
+// A web address: blank, or http(s)://... ("www.x.com" becomes "https://www.x.com").
+std::string clean_url(const Value& v, const std::string& key);
 Item validate_item(const Record& data);
 Record item_to_record(const Item& item);

@@ -139,6 +139,10 @@
   const state = {
     items: [],
     defaults: [],
+    manufacturers: [],  // [{name, website}] remembered by the app
+    pendingFile: null,  // datasheet file chosen in the item dialog, uploaded on save
+    removeFile: false,  // remove the attached datasheet on save
+    mfrAutoUrl: '',     // website auto-filled from the manufacturer name
     movements: [],
     movementsStale: true,
     view: 'inventory',
@@ -154,9 +158,10 @@
   async function loadItems() {
     const data = await api('GET', '/api/items');
     state.defaults = data.default_categories || [];
+    state.manufacturers = data.manufacturers || [];
     state.items = data.items.map((it) => ({
       ...it,
-      _hay: [it.sku, it.name, it.category, it.location, it.supplier, it.notes].join('\u0001').toLowerCase(),
+      _hay: [it.sku, it.name, it.category, it.location, it.supplier, it.manufacturer, it.notes].join('\u0001').toLowerCase(),
     }));
     state.movementsStale = true;
   }
@@ -170,6 +175,21 @@
   }
 
   const findItem = (id) => state.items.find((it) => it.id === id);
+  const hasDatasheet = (it) => Boolean(it.datasheet_url || it.datasheet_file);
+  const datasheetFileUrl = (it) => `/api/items/${it.id}/datasheet`;
+
+  const ICONS = {
+    doc: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 2.5h5.5L15 6v11.5H6z"/><path d="M11 2.5V6.5h4M8.5 10h4M8.5 13h4"/></svg>',
+    clip: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.5 6.5l-6 6a1.8 1.8 0 002.5 2.5l6.5-6.5a3.2 3.2 0 00-4.5-4.5L5.5 10.5a4.6 4.6 0 006.5 6.5l5-5"/></svg>',
+    globe: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2.2 2.8 4.5 2.8 7s-.8 4.8-2.8 7c-2-2.2-2.8-4.5-2.8-7S8 5.2 10 3z"/></svg>',
+  };
+  function linkIcons(it) {
+    const out = [];
+    if (it.datasheet_url) out.push(`<a class="row-link" href="${esc(it.datasheet_url)}" target="_blank" rel="noopener noreferrer" title="Open datasheet link">${ICONS.doc}<span class="sr-only">Datasheet</span></a>`);
+    if (it.datasheet_file) out.push(`<a class="row-link" href="${datasheetFileUrl(it)}" target="_blank" rel="noopener noreferrer" title="Open attached file: ${esc(it.datasheet_file)}">${ICONS.clip}<span class="sr-only">Datasheet file</span></a>`);
+    if (it.manufacturer_url) out.push(`<a class="row-link" href="${esc(it.manufacturer_url)}" target="_blank" rel="noopener noreferrer" title="Open ${esc(it.manufacturer || 'manufacturer')} website">${ICONS.globe}<span class="sr-only">Manufacturer website</span></a>`);
+    return out.length ? `<span class="row-links">${out.join('')}</span>` : '';
+  }
 
   function distinct(key) {
     return [...new Set(state.items.map((it) => it[key]).filter(Boolean))].sort(collator.compare);
@@ -197,6 +217,8 @@
     fillDatalist($('#dlCategories'), allCats);
     fillDatalist($('#dlLocations'), distinct('location'));
     fillDatalist($('#dlSuppliers'), distinct('supplier'));
+    fillDatalist($('#dlManufacturers'),
+      [...new Set([...state.manufacturers.map((m) => m.name), ...distinct('manufacturer')])].sort(collator.compare));
     const n = state.items.filter((it) => it.status === 'Reorder').length;
     const badge = $('#reorderBadge');
     badge.textContent = n;
@@ -220,6 +242,7 @@
       if (state.status === 'Reorder' && it.status !== 'Reorder') return false;
       if (state.status === 'OK' && it.status !== 'OK') return false;
       if (state.status === 'Out' && it.quantity > 0) return false;
+      if (state.status === 'NoDatasheet' && hasDatasheet(it)) return false;
       return terms.every((t) => it._hay.includes(t));
     });
     const { key, dir } = state.sort;
@@ -237,10 +260,11 @@
     tbody.innerHTML = list.map((it) => `
       <tr data-id="${it.id}" tabindex="0" class="${it.status === 'Reorder' ? 'is-low' : ''}">
         <td class="mono nowrap">${hl(it.sku, terms)}</td>
-        <td class="name">${hl(it.name, terms)}${it.notes ? `<div class="sub">${hl(it.notes.length > 90 ? it.notes.slice(0, 90) + '…' : it.notes, terms)}</div>` : ''}</td>
+        <td class="name"><span class="name-line">${hl(it.name, terms)}${linkIcons(it)}</span>${it.manufacturer ? `<div class="sub mfr-sub">${hl(it.manufacturer, terms)}</div>` : ''}${it.notes ? `<div class="sub">${hl(it.notes.length > 90 ? it.notes.slice(0, 90) + '…' : it.notes, terms)}</div>` : ''}</td>
         <td class="nowrap">${hl(it.category, terms)}</td>
         <td class="nowrap hide-sm">${hl(it.location, terms)}</td>
         <td class="hide-sm">${hl(it.supplier, terms)}</td>
+        <td class="hide-md">${hl(it.manufacturer, terms)}</td>
         <td class="num qty">${fmtNum(it.quantity)}</td>
         <td class="num muted hide-sm">${fmtNum(it.reorder_level)}</td>
         <td class="num hide-sm">${fmtMoney(it.unit_cost)}</td>
@@ -302,6 +326,7 @@
     const out = items.filter((it) => it.quantity <= 0).length;
     const cats = new Set(items.map((it) => it.category).filter(Boolean)).size;
     const avgCost = items.length ? items.reduce((s, it) => s + it.unit_cost, 0) / items.length : 0;
+    const noSheet = items.filter((it) => !hasDatasheet(it)).length;
 
     const card = (label, val, sub = '', extra = '') =>
       `<div class="kpi ${extra}"><div class="kpi-label">${label}</div><div class="kpi-value">${val}</div>${sub ? `<div class="kpi-sub">${sub}</div>` : ''}</div>`;
@@ -314,6 +339,9 @@
       `<button type="button" class="kpi kpi-action ${reorder.length ? 'kpi-warn' : ''}" data-action="show-reorder">
         <div class="kpi-label">Needs reorder</div><div class="kpi-value">${fmtNum(reorder.length)}</div>
         <div class="kpi-sub">${out ? `${fmtNum(out)} out of stock · ` : ''}View list →</div></button>`,
+      `<button type="button" class="kpi kpi-action ${noSheet ? 'kpi-info' : ''}" data-action="show-nodatasheet">
+        <div class="kpi-label">Missing datasheet</div><div class="kpi-value">${fmtNum(noSheet)}</div>
+        <div class="kpi-sub">${noSheet ? 'no link or file · View list →' : 'every item has one'}</div></button>`,
     ].join('');
 
     // Reorder list, grouped by supplier so it reads like a shopping list
@@ -411,11 +439,101 @@
     const margin = price > 0 ? ((price - cost) / price) * 100 : null;
     const status = qty <= 0 ? '<span class="badge badge-out">Out of stock</span>'
       : qty <= level ? '<span class="badge badge-reorder">Reorder</span>' : '<span class="badge badge-ok">OK</span>';
+    const sheet = itemForm.elements.datasheet_url.value.trim() ||
+      (state.pendingFile || (state.editing && state.editing.datasheet_file && !state.removeFile));
     $('#itemCalc').innerHTML =
       `<span>Total value <b>${fmtMoney(qty * cost)}</b></span>` +
       (margin !== null ? `<span>Margin <b>${numFmt.format(margin)}%</b></span>` : '') +
-      `<span>Status ${status}</span>`;
+      `<span>Status ${status}</span>` +
+      `<span>Datasheet ${sheet ? '<span class="badge badge-ok">Added</span>' : '<span class="badge badge-info">Missing</span>'}</span>`;
   }
+
+  // ---- links & attached file in the item dialog
+  const LINK_FIELDS = ['manufacturer_url', 'datasheet_url'];
+
+  /** Same rules as the server: blank, http(s)://..., or a bare address like www.x.com. */
+  function normalizeUrl(raw) {
+    const s = raw.trim();
+    if (!s) return '';
+    if (/^https?:\/\//i.test(s)) return s;
+    if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(s) || !s.includes('.') || /\s/.test(s)) return null;
+    return 'https://' + s;
+  }
+
+  function updateOpenButtons() {
+    for (const f of LINK_FIELDS) {
+      const url = normalizeUrl(itemForm.elements[f].value);
+      const a = $(`[data-open-for="${f}"]`);
+      a.hidden = !url;
+      if (url) a.href = url;
+    }
+  }
+
+  function websiteFor(name) {
+    const n = name.trim().toLowerCase();
+    if (!n) return '';
+    const known = state.manufacturers.find((m) => m.name.toLowerCase() === n);
+    if (known && known.website) return known.website;
+    const item = state.items.find((it) => it.manufacturer.toLowerCase() === n && it.manufacturer_url);
+    return item ? item.manufacturer_url : '';
+  }
+
+  function autofillWebsite() {
+    const field = itemForm.elements.manufacturer_url;
+    // Only fill an empty box, or replace a website we filled in ourselves.
+    if (field.value.trim() && field.value !== state.mfrAutoUrl) return;
+    const site = websiteFor(itemForm.elements.manufacturer.value);
+    field.value = site;
+    state.mfrAutoUrl = site;
+    $('#mfrAutoNote').hidden = !site;
+    updateOpenButtons();
+  }
+
+  function renderAttachment() {
+    const item = state.editing;
+    const name = $('#attachName');
+    const open = $('#attachOpen');
+    const remove = $('#attachRemove');
+    if (state.pendingFile) {
+      name.textContent = `${state.pendingFile.name} (${fmtSize(state.pendingFile.size)}) — will be attached when you save`;
+      open.hidden = true;
+      remove.hidden = false;
+    } else if (item && item.datasheet_file && !state.removeFile) {
+      name.textContent = `${item.datasheet_file} (${fmtSize(item.datasheet_size)})`;
+      open.href = datasheetFileUrl(item);
+      open.hidden = false;
+      remove.hidden = false;
+    } else {
+      name.textContent = state.removeFile ? 'File will be removed when you save' : 'No file attached';
+      open.hidden = true;
+      remove.hidden = true;
+    }
+    $('#attachPickLabel').textContent = (state.pendingFile || (item && item.datasheet_file && !state.removeFile)) ? 'Replace…' : 'Attach file…';
+    updateItemCalc();
+  }
+
+  function fmtSize(bytes) {
+    if (bytes >= 1048576) return `${numFmt.format(bytes / 1048576)} MB`;
+    if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${bytes} bytes`;
+  }
+
+  $('#attachFile').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) { showError($('#itemError'), 'That file is larger than 25 MB.'); return; }
+    if (file.size === 0) { showError($('#itemError'), 'That file is empty.'); return; }
+    showError($('#itemError'), '');
+    state.pendingFile = file;
+    state.removeFile = false;
+    renderAttachment();
+  });
+  $('#attachRemove').addEventListener('click', () => {
+    if (state.pendingFile) state.pendingFile = null;
+    else state.removeFile = true;
+    renderAttachment();
+  });
 
   async function openItemDialog(item = null) {
     state.editing = item;
@@ -425,14 +543,19 @@
     $('#saveItemBtn').textContent = item ? 'Save changes' : 'Add item';
     $('#deleteItemBtn').hidden = !item;
     $('#adjustFromItemBtn').hidden = !item;
+    state.pendingFile = null;
+    state.removeFile = false;
+    state.mfrAutoUrl = '';
+    $('#mfrAutoNote').hidden = true;
     if (item) {
-      for (const f of ['sku', 'name', 'category', 'location', 'supplier', 'notes', ...NUM_FIELDS]) {
+      for (const f of ['sku', 'name', 'category', 'location', 'supplier', 'notes', 'manufacturer', ...LINK_FIELDS, ...NUM_FIELDS]) {
         itemForm.elements[f].value = item[f] ?? '';
       }
     } else if (state.category) {
       itemForm.elements.category.value = state.category;
     }
-    updateItemCalc();
+    updateOpenButtons();
+    renderAttachment();
     const hist = $('#itemHistory');
     hist.hidden = true;
     $('#itemDialog').showModal();
@@ -453,8 +576,23 @@
   }
 
   itemForm.addEventListener('input', (e) => {
-    if (NUM_FIELDS.includes(e.target.name)) updateItemCalc();
+    const name = e.target.name;
+    if (NUM_FIELDS.includes(name)) updateItemCalc();
+    if (name === 'manufacturer') autofillWebsite();
+    if (LINK_FIELDS.includes(name)) {
+      if (name === 'manufacturer_url') $('#mfrAutoNote').hidden = true;
+      updateOpenButtons();
+      updateItemCalc();
+    }
   });
+  // Tidy a bare address ("www.x.com") into a full link when leaving the box.
+  for (const f of LINK_FIELDS) {
+    itemForm.elements[f].addEventListener('blur', (e) => {
+      const url = normalizeUrl(e.target.value);
+      if (url) e.target.value = url;
+      updateOpenButtons();
+    });
+  }
 
   itemForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -470,6 +608,16 @@
         return;
       }
     }
+    for (const f of LINK_FIELDS) {
+      const url = normalizeUrl(data[f]);
+      if (url === null) {
+        const label = f === 'datasheet_url' ? 'Datasheet link' : 'Manufacturer website';
+        showError(err, `${label} must be a web address, like https://www.example.com`);
+        itemForm.elements[f].focus();
+        return;
+      }
+      data[f] = url;
+    }
     const btn = $('#saveItemBtn');
     btn.disabled = true;
     try {
@@ -477,10 +625,21 @@
       const res = editing
         ? await api('PUT', `/api/items/${editing.id}`, data)
         : await api('POST', '/api/items', data);
+      let fileProblem = '';
+      try {
+        if (state.pendingFile) {
+          await api('POST', `/api/items/${res.item.id}/datasheet?filename=${encodeURIComponent(state.pendingFile.name)}`, state.pendingFile);
+        } else if (state.removeFile && editing && editing.datasheet_file) {
+          await api('DELETE', `/api/items/${res.item.id}/datasheet`);
+        }
+      } catch (fx) {
+        fileProblem = fx.message;
+      }
       $('#itemDialog').close();
       await loadItems();
       renderAll();
-      toast(editing ? `Saved ${res.item.sku}` : `Added ${res.item.sku} · ${res.item.name}`);
+      if (fileProblem) toast(`Saved ${res.item.sku}, but the datasheet file wasn't saved: ${fileProblem}`, 'error');
+      else toast(editing ? `Saved ${res.item.sku}` : `Added ${res.item.sku} · ${res.item.name}`);
     } catch (ex) {
       showError(err, ex.message);
     } finally {
@@ -699,12 +858,14 @@
     if (!th) return;
     const key = th.dataset.sort;
     const numeric = ['quantity', 'reorder_level', 'unit_cost', 'unit_price', 'total_value'].includes(key);
+    if (!key) return;
     state.sort = state.sort.key === key ? { key, dir: -state.sort.dir } : { key, dir: numeric ? -1 : 1 };
     renderInventory();
   });
 
   // Row clicks (inventory, reorder list and activity rows open the item)
   function onRowActivate(e) {
+    if (e.target.closest('a')) return;  // link icons open their page instead
     const btn = e.target.closest('button[data-action]');
     const tr = e.target.closest('tr[data-id]');
     if (btn && tr) {
@@ -730,10 +891,10 @@
     if (action === 'clear') clearFilters();
     else if (action === 'add') openItemDialog();
     else if (action === 'import') openImport();
-    else if (action === 'show-reorder') {
+    else if (action === 'show-reorder' || action === 'show-nodatasheet') {
       clearFilters();
-      state.status = 'Reorder';
-      $('#fStatus').value = 'Reorder';
+      state.status = action === 'show-reorder' ? 'Reorder' : 'NoDatasheet';
+      $('#fStatus').value = state.status;
       setView('inventory');
       renderInventory();
     }

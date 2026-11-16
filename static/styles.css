@@ -274,6 +274,16 @@ select:focus, .field input:focus, .field textarea:focus {
 .badge-ok { background: var(--ok-soft); color: var(--ok); }
 .badge-reorder { background: var(--warn-soft); color: var(--warn); }
 .badge-out { background: var(--bad-soft); color: var(--bad); }
+.badge-info { background: var(--accent-soft); color: var(--accent); }
+
+.name-line { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.row-links { display: inline-flex; gap: 2px; }
+.row-link {
+  display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 6px;
+  color: var(--text-3);
+}
+.row-link:hover { background: var(--accent-soft); color: var(--accent); }
+.row-link svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 
 .kind {
   display: inline-block; padding: 2px 8px; border-radius: 6px;
@@ -307,6 +317,8 @@ select:focus, .field input:focus, .field textarea:focus {
 .kpi-warn { background: var(--warn-soft); border-color: transparent; }
 .kpi-warn .kpi-value, .kpi-warn .kpi-label { color: var(--warn); }
 .kpi-warn .kpi-sub { color: var(--warn); opacity: .85; }
+.kpi-info { background: var(--accent-soft); border-color: transparent; }
+.kpi-info .kpi-value, .kpi-info .kpi-label, .kpi-info .kpi-sub { color: var(--accent); }
 
 .dash-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 .panel {
@@ -363,9 +375,26 @@ select:focus, .field input:focus, .field textarea:focus {
 .form-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px 12px; }
 .c3 { grid-column: span 3; } .c4 { grid-column: span 4; } .c8 { grid-column: span 8; } .c12 { grid-column: span 12; }
 .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.field > span { color: var(--text-2); font-size: 12.5px; font-weight: 600; }
+.field > span, .field > label, .field-label { color: var(--text-2); font-size: 12.5px; font-weight: 600; }
 .field > span em { color: var(--bad); font-style: normal; }
-.field > span i { font-style: normal; font-weight: 400; color: var(--text-3); }
+.field > span i, .field > label i, .field-label i { font-style: normal; font-weight: 400; color: var(--text-3); }
+.form-section {
+  margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--border);
+  color: var(--text); font-size: 13px; font-weight: 650;
+}
+.input-action { display: flex; gap: 8px; align-items: center; }
+.input-action input { flex: 1; min-width: 0; }
+.input-action .btn { height: 38px; text-decoration: none; }
+.attach {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
+}
+.attach > svg { width: 18px; height: 18px; fill: none; stroke: var(--text-3); stroke-width: 1.6; stroke-linejoin: round; }
+.attach-name { flex: 1; min-width: 140px; color: var(--text-2); font-size: 13px; overflow-wrap: anywhere; }
+.attach .btn { text-decoration: none; }
+.attach-pick { position: relative; overflow: hidden; }
+.attach-pick input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.attach-pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .field input, .field textarea { width: 100%; padding: 8px 10px; }
 .field input { height: 38px; }
 .field textarea { resize: vertical; min-height: 60px; line-height: 1.4; }
@@ -478,6 +507,13 @@ select:focus, .field input:focus, .field textarea:focus {
 }
 @media (max-width: 1100px) {
   .dash-grid { grid-template-columns: 1fr; }
+}
+/* The Manufacturer column only fits on wide windows; otherwise it's shown under the item name. */
+@media (max-width: 1440px) {
+  .hide-md { display: none; }
+}
+@media (min-width: 1441px) {
+  .mfr-sub { display: none; }
 }
 @media (max-width: 860px) {
   .topbar { flex-wrap: wrap; gap: 0 12px; padding: 10px 16px 0; }

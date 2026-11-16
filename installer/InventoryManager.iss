@@ -3,11 +3,15 @@
 ; wizard also offers "install for all users".
 
 #define AppName "Inventory Manager"
-#define AppVersion "2.0.0"
+#define AppVersion "2.1.0"
 #define AppExe "InventoryManager.exe"
+; Overridable so test builds can install side by side without touching a real installation.
+#ifndef AppGuid
+  #define AppGuid "{{00DB0E25-8CD3-4641-9599-EC7D1561E20C}"
+#endif
 
 [Setup]
-AppId={{00DB0E25-8CD3-4641-9599-EC7D1561E20C}
+AppId={#AppGuid}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}

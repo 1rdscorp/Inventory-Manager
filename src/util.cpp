@@ -6,21 +6,24 @@
 #include <ctime>
 
 const std::vector<std::string> kFields = {"sku",      "name",          "category",  "location",   "supplier",
-                                          "quantity", "reorder_level", "unit_cost", "unit_price", "notes"};
+                                          "quantity", "reorder_level", "unit_cost", "unit_price", "notes",
+                                          "manufacturer", "manufacturer_url", "datasheet_url"};
 const std::vector<std::string> kDefaultCategories = {"Electronics", "Office Supplies", "Furniture",
                                                      "Tools",       "Packaging",       "Other"};
 
 namespace {
 
 const std::vector<std::pair<std::string, size_t>> kTextLimits = {
-    {"sku", 64}, {"name", 200}, {"category", 80}, {"location", 80}, {"supplier", 120}, {"notes", 2000}};
+    {"sku", 64}, {"name", 200}, {"category", 80}, {"location", 80}, {"supplier", 120}, {"notes", 2000},
+    {"manufacturer", 120}, {"manufacturer_url", 500}, {"datasheet_url", 500}};
 
 std::string label_for(const std::string& key) {
     static const std::map<std::string, std::string> labels = {
         {"sku", "SKU"},           {"name", "Item name"},          {"category", "Category"},
         {"location", "Location"}, {"supplier", "Supplier"},       {"notes", "Notes"},
         {"quantity", "Quantity"}, {"reorder_level", "Reorder level"}, {"unit_cost", "Unit cost"},
-        {"unit_price", "Unit price"}};
+        {"unit_price", "Unit price"}, {"manufacturer", "Manufacturer"}, {"manufacturer_url", "Manufacturer website"},
+        {"datasheet_url", "Datasheet link"}};
     auto it = labels.find(key);
     return it == labels.end() ? key : it->second;
 }
@@ -182,6 +185,40 @@ std::string clean_text(const Value& v, const std::string& key) {
     return s;
 }
 
+std::string clean_url(const Value& v, const std::string& key) {
+    if (v.kind == Value::Other) throw ApiError(label_for(key) + " must be text");
+    if (v.kind == Value::Empty) return "";
+    if (v.kind != Value::Text) throw ApiError(label_for(key) + " must be a web address");
+    std::string s;
+    for (char c : v.text)
+        if (static_cast<unsigned char>(c) >= 0x20) s += c;
+    s = trim(s);
+    if (s.empty()) return "";
+    const std::string bad = label_for(key) + " must be a web address, like https://www.example.com";
+    for (char c : s)
+        if (is_space(c) || c == '<' || c == '>' || c == '"' || c == '`' || c == '\\' || c == '{' || c == '}' || c == '|' || c == '^')
+            throw ApiError(bad);
+    std::string lower = lower_ascii(s);
+    if (lower.rfind("http://", 0) != 0 && lower.rfind("https://", 0) != 0) {
+        // Anything else that looks like "scheme:..." (javascript:, file:, mailto:...) is refused.
+        size_t colon = s.find(':');
+        if (colon != std::string::npos) {
+            bool letters = colon > 0;
+            for (size_t i = 0; i < colon; ++i)
+                if (!((lower[i] >= 'a' && lower[i] <= 'z') || lower[i] == '+' || lower[i] == '.' || lower[i] == '-')) letters = false;
+            bool port = colon + 1 < s.size() && s[colon + 1] >= '0' && s[colon + 1] <= '9';
+            if (letters && !port) throw ApiError(bad);
+        }
+        if (s.find('.') == std::string::npos || s[0] == '/' || s[0] == '.') throw ApiError(bad);
+        s = "https://" + s;
+    }
+    size_t host_start = s.find("://") + 3;
+    if (host_start >= s.size() || s[host_start] == '/' || s[host_start] == '.' || s[host_start] == ':')
+        throw ApiError(bad);
+    if (utf8_length(s) > 500) throw ApiError(label_for(key) + " is too long (max 500 characters)");
+    return s;
+}
+
 Item validate_item(const Record& data) {
     Item it;
     it.sku = clean_text(get(data, "sku"), "sku");
@@ -190,6 +227,9 @@ Item validate_item(const Record& data) {
     it.location = clean_text(get(data, "location"), "location");
     it.supplier = clean_text(get(data, "supplier"), "supplier");
     it.notes = clean_text(get(data, "notes"), "notes");
+    it.manufacturer = clean_text(get(data, "manufacturer"), "manufacturer");
+    it.manufacturer_url = clean_url(get(data, "manufacturer_url"), "manufacturer_url");
+    it.datasheet_url = clean_url(get(data, "datasheet_url"), "datasheet_url");
     it.quantity = parse_number(get(data, "quantity"), "Quantity");
     it.reorder_level = parse_number(get(data, "reorder_level"), "Reorder level");
     it.unit_cost = parse_number(get(data, "unit_cost"), "Unit cost");
@@ -206,6 +246,9 @@ Record item_to_record(const Item& it) {
             {"location", Value::str(it.location)},
             {"supplier", Value::str(it.supplier)},
             {"notes", Value::str(it.notes)},
+            {"manufacturer", Value::str(it.manufacturer)},
+            {"manufacturer_url", Value::str(it.manufacturer_url)},
+            {"datasheet_url", Value::str(it.datasheet_url)},
             {"quantity", Value::number(it.quantity)},
             {"reorder_level", Value::number(it.reorder_level)},
             {"unit_cost", Value::number(it.unit_cost)},

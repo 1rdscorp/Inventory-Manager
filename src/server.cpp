@@ -1,5 +1,7 @@
 #include "server.h"
 
+#include <cctype>
+#include <cstdio>
 #include <ctime>
 
 #include <httplib.h>
@@ -140,7 +142,9 @@ void AppServer::routes() {
     });
 
     s.Get("/api/items", safe([this](const httplib::Request&, httplib::Response& res) {
-        send_json(res, {{"items", store_.list_items()}, {"default_categories", kDefaultCategories}});
+        send_json(res, {{"items", store_.list_items()},
+                        {"default_categories", kDefaultCategories},
+                        {"manufacturers", store_.list_manufacturers()}});
     }));
     s.Post("/api/items", safe([this](const httplib::Request& req, httplib::Response& res) {
         send_json(res, {{"item", store_.create_item(item_record(parse_json_body(req)))}}, 201);
@@ -161,6 +165,39 @@ void AppServer::routes() {
     s.Get(R"(/api/items/(\d+)/movements)", safe([this](const httplib::Request& req, httplib::Response& res) {
         send_json(res, {{"movements", store_.movements(500, std::stoll(req.matches[1]))}});
     }));
+    // ---- attached datasheet files
+    s.Post(R"(/api/items/(\d+)/datasheet)", safe([this](const httplib::Request& req, httplib::Response& res) {
+        send_json(res, {{"item", store_.save_datasheet(std::stoll(req.matches[1]),
+                                                       clean_filename(req.get_param_value("filename")), req.body)}});
+    }));
+    s.Delete(R"(/api/items/(\d+)/datasheet)", safe([this](const httplib::Request& req, httplib::Response& res) {
+        send_json(res, {{"item", store_.remove_datasheet(std::stoll(req.matches[1]))}});
+    }));
+    s.Get(R"(/api/items/(\d+)/datasheet)", safe([this](const httplib::Request& req, httplib::Response& res) {
+        std::string filename, bytes;
+        if (!store_.get_datasheet(std::stoll(req.matches[1]), filename, bytes))
+            throw NotFound("This item has no datasheet file attached.");
+        // Only document/image types that can't run scripts are shown in place; anything else downloads.
+        static const std::map<std::string, std::string> inline_types = {
+            {".pdf", "application/pdf"}, {".png", "image/png"},   {".jpg", "image/jpeg"},
+            {".jpeg", "image/jpeg"},     {".gif", "image/gif"},   {".webp", "image/webp"},
+            {".txt", "text/plain; charset=utf-8"}};
+        size_t dot = filename.find_last_of('.');
+        std::string ext = dot == std::string::npos ? "" : lower_ascii(filename.substr(dot));
+        auto type = inline_types.find(ext);
+        // Plain-ASCII fallback name plus the exact UTF-8 name (RFC 6266).
+        std::string ascii_name, encoded;
+        for (unsigned char c : filename) {
+            ascii_name += (c < 0x20 || c > 0x7E || c == '"' || c == '\\') ? '_' : static_cast<char>(c);
+            if (isalnum(c) || c == '.' || c == '-' || c == '_') encoded += static_cast<char>(c);
+            else { char hex[4]; std::snprintf(hex, sizeof hex, "%%%02X", c); encoded += hex; }
+        }
+        res.set_header("Cache-Control", "no-store");
+        res.set_header("Content-Disposition", std::string(type != inline_types.end() ? "inline" : "attachment") +
+                                                  "; filename=\"" + ascii_name + "\"; filename*=UTF-8''" + encoded);
+        res.set_content(bytes, type != inline_types.end() ? type->second : "application/octet-stream");
+    }));
+
     s.Get("/api/movements", safe([this](const httplib::Request& req, httplib::Response& res) {
         int limit = 2000;
         try {

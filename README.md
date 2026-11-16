@@ -4,7 +4,7 @@ A searchable inventory app for Windows, built from `inventory_management.xlsx`. 
 
 ## Install
 
-1. Download **`InventoryManager-Setup-2.0.0.exe`** from this repository's **Releases** page (or build it yourself; see below).
+1. Download **`InventoryManager-Setup-2.1.0.exe`** from this repository's **Releases** page (or build it yourself; see below).
 2. Double-click it and follow the steps. No administrator rights are needed: it installs for your Windows account. To install it for everyone on the PC, choose that option in the first screen of the setup wizard.
 3. Start **Inventory Manager** from the Start menu or the desktop shortcut.
 
@@ -19,11 +19,17 @@ The first time it runs, it imports the items from the bundled `inventory_managem
 - **Search**: results update as you type and match SKU, item name, category, location, supplier and notes. Several words narrow the results (`aisle 3 hub`). Press <kbd>/</kbd> to jump to the search box.
 - **Filter and sort**: filter by category, location or status (Needs reorder / Out of stock / OK), and click any column heading to sort.
 - **Add, edit and delete items**: click a row to edit it. *Total value* (Quantity × Unit Cost) and *Status* ("Reorder" when Quantity ≤ Reorder Level) are calculated the same way as in the spreadsheet.
+- **Manufacturer and datasheet**: each item can have a manufacturer, the manufacturer's website, a datasheet link, and an attached datasheet file (PDF or similar, up to 25 MB, stored inside the app's data file).
+  - The app remembers each manufacturer's website: type a known manufacturer and the website fills in automatically.
+  - Small icons next to the item name open the datasheet, the attached file, or the manufacturer's website in your web browser.
+  - You can type `www.example.com`; it becomes `https://www.example.com`. Anything that isn't a web address is refused.
+  - **Missing datasheet:** pick it in the status filter, or click the Dashboard card, to list items without a datasheet link or file.
 - **Adjust stock**: the **Adjust** button lets you *Receive* (+), *Remove* (−) or *Set count* (stocktake), with an optional note such as a PO number.
 - **Dashboard**: totals, items needing reorder grouped by supplier, and stock value by category.
 - **Activity**: a searchable log of every stock change.
 - **Import**: load an `.xlsx` or `.csv` file. Columns are matched by heading, and you see a preview of what will change before anything is saved. *Merge* updates matching SKUs and adds new ones; *Replace* swaps out the whole inventory.
-- **Export**: download an Excel workbook (Inventory and Activity sheets, with live formulas) or a CSV file. Files go to your Downloads folder.
+  - Link columns can be named *Manufacturer* (or *Brand*), *Manufacturer Website* (or *Website*) and *Datasheet URL* (or *Datasheet*, *Spec Sheet*), so you can fill in links for many items at once in Excel.
+- **Export**: download an Excel workbook (Inventory and Activity sheets, with live formulas and clickable links) or a CSV file. Files go to your Downloads folder.
 
 ## Your data
 

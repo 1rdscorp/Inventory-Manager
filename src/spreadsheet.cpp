@@ -36,6 +36,11 @@ const std::map<std::string, std::string>& alias_lookup() {
             {"unit_cost", {"unit cost", "cost", "cost price", "purchase price"}},
             {"unit_price", {"unit price", "price", "sale price", "selling price", "retail price"}},
             {"notes", {"notes", "note", "comments", "comment", "remarks"}},
+            {"manufacturer", {"manufacturer", "manufacturer name", "mfr", "mfg", "brand", "make", "maker"}},
+            {"manufacturer_url", {"manufacturer website", "manufacturer url", "manufacturer site", "manufacturer link",
+                                  "mfr website", "brand website", "website", "web site"}},
+            {"datasheet_url", {"datasheet url", "datasheet", "datasheet link", "data sheet", "data sheet url",
+                               "data sheet link", "spec sheet", "specification sheet", "product page", "product url"}},
         };
         std::map<std::string, std::string> m;
         for (const auto& [field, list] : aliases)
@@ -410,6 +415,10 @@ const std::vector<Column> kItemColumns = {
     {"Total Value", "total_value", 14, "money", "F{r}*H{r}"},
     {"Status", "status", 11, "text", "IF(F{r}<=G{r},\"Reorder\",\"OK\")"},
     {"Notes", "notes", 40, "text", nullptr},
+    {"Manufacturer", "manufacturer", 20, "text", nullptr},
+    {"Manufacturer Website", "manufacturer_url", 34, "url", nullptr},
+    {"Datasheet URL", "datasheet_url", 40, "url", nullptr},
+    {"Datasheet File", "datasheet_file", 24, "text", nullptr},
 };
 const std::vector<Column> kMovementColumns = {
     {"When", "created_at", 22, "text", nullptr},
@@ -456,7 +465,9 @@ std::string replace_all(std::string s, const std::string& from, const std::strin
     return s;
 }
 
-std::string sheet_xml(const std::vector<Column>& cols, const json& records, std::string& last_ref) {
+// links: (cell, web address) pairs for clickable "url" cells, written as sheet hyperlinks.
+std::string sheet_xml(const std::vector<Column>& cols, const json& records, std::string& last_ref,
+                      std::vector<std::pair<std::string, std::string>>& links) {
     std::string x = std::string(R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns=")") +
                     kNsMain + "\" xmlns:r=\"" + kNsRel +
                     "\"><sheetViews><sheetView workbookViewId=\"0\"><pane ySplit=\"1\" topLeftCell=\"A2\" "
@@ -479,35 +490,46 @@ std::string sheet_xml(const std::vector<Column>& cols, const json& records, std:
             std::string ref = col_letter(static_cast<int>(i)) + rs;
             json value = rec.contains(col.key) ? rec[col.key] : json();
             std::string f = col.formula ? "<f>" + xml_text(replace_all(col.formula, "{r}", rs)) + "</f>" : "";
-            std::string style = std::string(col.kind) == "money" ? " s=\"2\"" : "";
+            std::string kind = col.kind;
+            std::string style = kind == "money" ? " s=\"2\"" : kind == "url" ? " s=\"3\"" : "";
             if (value.is_number()) {
                 x += "<c r=\"" + ref + "\"" + style + ">" + f + "<v>" + json_number_text(value) + "</v></c>";
             } else if (value.is_string() && !value.get<std::string>().empty()) {
                 std::string t = xml_text(value.get<std::string>());
                 if (col.formula) x += "<c r=\"" + ref + "\" t=\"str\">" + f + "<v>" + t + "</v></c>";
-                else x += "<c r=\"" + ref + "\" t=\"inlineStr\"><is><t xml:space=\"preserve\">" + t + "</t></is></c>";
+                else x += "<c r=\"" + ref + "\"" + style + " t=\"inlineStr\"><is><t xml:space=\"preserve\">" + t + "</t></is></c>";
+                if (kind == "url") links.emplace_back(ref, value.get<std::string>());
             }
         }
         x += "</row>";
         ++r;
     }
     last_ref = col_letter(static_cast<int>(cols.size()) - 1) + std::to_string(records.size() + 1);
-    x += "</sheetData><autoFilter ref=\"A1:" + last_ref + "\"/></worksheet>";
+    x += "</sheetData><autoFilter ref=\"A1:" + last_ref + "\"/>";
+    if (!links.empty()) {
+        x += "<hyperlinks>";
+        for (size_t i = 0; i < links.size(); ++i)
+            x += "<hyperlink ref=\"" + links[i].first + "\" r:id=\"rIdLink" + std::to_string(i + 1) + "\"/>";
+        x += "</hyperlinks>";
+    }
+    x += "</worksheet>";
     return x;
 }
 
 const char* kStylesXml =
     R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">)"
     R"(<numFmts count="1"><numFmt numFmtId="164" formatCode="\$#,##0.00"/></numFmts>)"
-    R"(<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>)"
-    R"(<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts>)"
+    R"(<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font>)"
+    R"(<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>)"
+    R"(<font><u/><sz val="11"/><color rgb="FF0563C1"/><name val="Calibri"/></font></fonts>)"
     R"(<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>)"
     R"(<fill><patternFill patternType="solid"><fgColor rgb="FF1F4E79"/><bgColor indexed="64"/></patternFill></fill></fills>)"
     R"(<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>)"
     R"(<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>)"
-    R"(<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>)"
+    R"(<cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>)"
     R"(<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>)"
-    R"(<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>)"
+    R"(<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>)"
+    R"(<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>)"
     R"(<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>)";
 
 class ZipWriter {
@@ -543,11 +565,21 @@ struct SheetSpec {
 std::string build_xlsx(const std::vector<SheetSpec>& sheets) {
     const std::string decl = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>)";
     const std::string pkg_rels = "http://schemas.openxmlformats.org/package/2006/relationships";
-    std::vector<std::string> parts;
+    std::vector<std::string> parts, sheet_rels;
     std::string defined;
     for (size_t i = 0; i < sheets.size(); ++i) {
         std::string last;
-        parts.push_back(sheet_xml(*sheets[i].cols, sheets[i].records, last));
+        std::vector<std::pair<std::string, std::string>> links;
+        parts.push_back(sheet_xml(*sheets[i].cols, sheets[i].records, last, links));
+        std::string rels;
+        if (!links.empty()) {
+            rels = decl + "<Relationships xmlns=\"" + pkg_rels + "\">";
+            for (size_t k = 0; k < links.size(); ++k)
+                rels += "<Relationship Id=\"rIdLink" + std::to_string(k + 1) + "\" Type=\"" + kNsRel +
+                        "/hyperlink\" Target=\"" + xml_text(links[k].second) + "\" TargetMode=\"External\"/>";
+            rels += "</Relationships>";
+        }
+        sheet_rels.push_back(rels);
         size_t digit = last.find_first_of("0123456789");
         defined += "<definedName name=\"_xlnm._FilterDatabase\" localSheetId=\"" + std::to_string(i) +
                    "\" hidden=\"1\">'" + xml_text(sheets[i].name) + "'!$A$1:$" + last.substr(0, digit) + "$" +
@@ -580,7 +612,11 @@ std::string build_xlsx(const std::vector<SheetSpec>& sheets) {
     z.add("xl/workbook.xml", workbook);
     z.add("xl/_rels/workbook.xml.rels", wb_rels);
     z.add("xl/styles.xml", kStylesXml);
-    for (size_t i = 0; i < parts.size(); ++i) z.add("xl/worksheets/sheet" + std::to_string(i + 1) + ".xml", parts[i]);
+    for (size_t i = 0; i < parts.size(); ++i) {
+        z.add("xl/worksheets/sheet" + std::to_string(i + 1) + ".xml", parts[i]);
+        if (!sheet_rels[i].empty())
+            z.add("xl/worksheets/_rels/sheet" + std::to_string(i + 1) + ".xml.rels", sheet_rels[i]);
+    }
     return z.finish();
 }
 
