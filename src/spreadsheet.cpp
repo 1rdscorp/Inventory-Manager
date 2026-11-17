@@ -36,9 +36,8 @@ const std::map<std::string, std::string>& alias_lookup() {
             {"unit_cost", {"unit cost", "cost", "cost price", "purchase price"}},
             {"unit_price", {"unit price", "price", "sale price", "selling price", "retail price"}},
             {"notes", {"notes", "note", "comments", "comment", "remarks"}},
-            {"manufacturer", {"manufacturer", "manufacturer name", "mfr", "mfg", "brand", "make", "maker"}},
-            {"manufacturer_url", {"manufacturer website", "manufacturer url", "manufacturer site", "manufacturer link",
-                                  "mfr website", "brand website", "website", "web site"}},
+            {"supplier_url", {"supplier website", "supplier url", "supplier site", "supplier link", "vendor website",
+                              "vendor url", "vendor site", "website", "web site"}},
             {"datasheet_url", {"datasheet url", "datasheet", "datasheet link", "data sheet", "data sheet url",
                                "data sheet link", "spec sheet", "specification sheet", "product page", "product url"}},
         };
@@ -415,8 +414,7 @@ const std::vector<Column> kItemColumns = {
     {"Total Value", "total_value", 14, "money", "F{r}*H{r}"},
     {"Status", "status", 11, "text", "IF(F{r}<=G{r},\"Reorder\",\"OK\")"},
     {"Notes", "notes", 40, "text", nullptr},
-    {"Manufacturer", "manufacturer", 20, "text", nullptr},
-    {"Manufacturer Website", "manufacturer_url", 34, "url", nullptr},
+    {"Supplier Website", "supplier_url", 34, "url", nullptr},
     {"Datasheet URL", "datasheet_url", 40, "url", nullptr},
     {"Datasheet File", "datasheet_file", 24, "text", nullptr},
 };
@@ -518,7 +516,7 @@ std::string sheet_xml(const std::vector<Column>& cols, const json& records, std:
 
 const char* kStylesXml =
     R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">)"
-    R"(<numFmts count="1"><numFmt numFmtId="164" formatCode="\$#,##0.00"/></numFmts>)"
+    R"(<numFmts count="1"><numFmt numFmtId="164" formatCode="{MONEY}"/></numFmts>)"
     R"(<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font>)"
     R"(<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>)"
     R"(<font><u/><sz val="11"/><color rgb="FF0563C1"/><name val="Calibri"/></font></fonts>)"
@@ -562,7 +560,7 @@ struct SheetSpec {
     json records;
 };
 
-std::string build_xlsx(const std::vector<SheetSpec>& sheets) {
+std::string build_xlsx(const std::vector<SheetSpec>& sheets, const std::string& money_format) {
     const std::string decl = R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>)";
     const std::string pkg_rels = "http://schemas.openxmlformats.org/package/2006/relationships";
     std::vector<std::string> parts, sheet_rels;
@@ -611,7 +609,7 @@ std::string build_xlsx(const std::vector<SheetSpec>& sheets) {
     z.add("_rels/.rels", root_rels);
     z.add("xl/workbook.xml", workbook);
     z.add("xl/_rels/workbook.xml.rels", wb_rels);
-    z.add("xl/styles.xml", kStylesXml);
+    z.add("xl/styles.xml", replace_all(kStylesXml, "{MONEY}", xml_text(money_format)));
     for (size_t i = 0; i < parts.size(); ++i) {
         z.add("xl/worksheets/sheet" + std::to_string(i + 1) + ".xml", parts[i]);
         if (!sheet_rels[i].empty())
@@ -637,7 +635,21 @@ SheetData read_spreadsheet(const std::string& bytes) {
     return out;
 }
 
-std::string build_xlsx_export(const json& items, const json& movements) {
+namespace {
+
+// Excel number format showing the chosen currency, e.g. "€"#,##0.00
+std::string money_format(const std::string& currency) {
+    static const std::map<std::string, std::string> symbols = {
+        {"USD", "$"},   {"EUR", "€"}, {"GBP", "£"}, {"CAD", "CA$"}, {"AUD", "A$"},  {"NZD", "NZ$"}, {"CHF", "CHF "},
+        {"JPY", "¥"}, {"CNY", "CN¥"}, {"INR", "₹"}, {"MXN", "MX$"}, {"BRL", "R$"},  {"ZAR", "R "},
+        {"SEK", "kr "}, {"NOK", "kr "}, {"DKK", "kr "}, {"PLN", "zł "}, {"SGD", "S$"}, {"HKD", "HK$"}, {"AED", "AED "}};
+    auto it = symbols.find(currency);
+    return "\"" + (it == symbols.end() ? std::string("$") : it->second) + "\"#,##0.00";
+}
+
+}  // namespace
+
+std::string build_xlsx_export(const json& items, const json& movements, const std::string& currency) {
     static const std::map<std::string, std::string> kinds = {
         {"created", "Created"}, {"received", "Received"}, {"removed", "Removed"}, {"counted", "Count"},
         {"edited", "Edited"},   {"imported", "Imported"}, {"deleted", "Deleted"}};
@@ -650,7 +662,7 @@ std::string build_xlsx_export(const json& items, const json& movements) {
         m["created_at"] = when.substr(0, 19);
         activity.push_back(std::move(m));
     }
-    return build_xlsx({{"Inventory", &kItemColumns, items}, {"Activity", &kMovementColumns, activity}});
+    return build_xlsx({{"Inventory", &kItemColumns, items}, {"Activity", &kMovementColumns, activity}}, money_format(currency));
 }
 
 std::string build_csv_export(const json& items) {

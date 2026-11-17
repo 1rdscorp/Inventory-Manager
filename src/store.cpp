@@ -1,5 +1,8 @@
 #include "store.h"
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -41,11 +44,12 @@ CREATE TABLE IF NOT EXISTS movements (
 );
 CREATE INDEX IF NOT EXISTS idx_movements_item ON movements(item_id);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
-CREATE TABLE IF NOT EXISTS manufacturers (
+CREATE TABLE IF NOT EXISTS suppliers (
     name       TEXT PRIMARY KEY COLLATE NOCASE,
     website    TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS attachments (
     item_id     INTEGER PRIMARY KEY,
     filename    TEXT NOT NULL,
@@ -55,14 +59,15 @@ CREATE TABLE IF NOT EXISTS attachments (
 );
 )SQL";
 
-// Columns added in version 2.1 - added to older databases when they're opened.
-const char* kNewItemColumns[] = {"manufacturer", "manufacturer_url", "datasheet_url"};
+// Columns added since version 2.0 - added to older databases when they're opened.
+// (Version 2.1's manufacturer / manufacturer_url columns are left in place, unused, so no data is lost.)
+const char* kNewItemColumns[] = {"supplier_url", "datasheet_url"};
 
 // Every item query reads these columns, in this order (see read_row).
 const char* kItemSelect =
     "SELECT items.id, items.sku, items.name, items.category, items.location, items.supplier, items.quantity, "
     "items.reorder_level, items.unit_cost, items.unit_price, items.notes, items.created_at, items.updated_at, "
-    "items.manufacturer, items.manufacturer_url, items.datasheet_url, a.filename, a.size "
+    "items.supplier_url, items.datasheet_url, a.filename, a.size "
     "FROM items LEFT JOIN attachments a ON a.item_id = items.id";
 
 void exec(sqlite3* db, const char* sql) {
@@ -157,12 +162,11 @@ ItemRow read_row(Stmt& s) {
     r.item.notes = s.text(10);
     r.created_at = s.text(11);
     r.updated_at = s.text(12);
-    r.item.manufacturer = s.text(13);
-    r.item.manufacturer_url = s.text(14);
-    r.item.datasheet_url = s.text(15);
-    if (!s.is_null(16)) {
-        r.file_name = s.text(16);
-        r.file_size = s.i64(17);
+    r.item.supplier_url = s.text(13);
+    r.item.datasheet_url = s.text(14);
+    if (!s.is_null(15)) {
+        r.file_name = s.text(15);
+        r.file_size = s.i64(16);
     }
     return r;
 }
@@ -182,8 +186,7 @@ json item_json(const ItemRow& r) {
             {"unit_cost", tidy_number(it.unit_cost)},
             {"unit_price", tidy_number(it.unit_price)},
             {"notes", it.notes},
-            {"manufacturer", it.manufacturer},
-            {"manufacturer_url", it.manufacturer_url},
+            {"supplier_url", it.supplier_url},
             {"datasheet_url", it.datasheet_url},
             {"datasheet_file", r.file_name},
             {"datasheet_size", r.file_size},
@@ -196,8 +199,8 @@ json item_json(const ItemRow& r) {
 bool same(const Item& a, const Item& b) {
     auto eq = [](double x, double y) { return std::fabs(x - y) < 1e-9; };
     return a.sku == b.sku && a.name == b.name && a.category == b.category && a.location == b.location &&
-           a.supplier == b.supplier && a.notes == b.notes && a.manufacturer == b.manufacturer &&
-           a.manufacturer_url == b.manufacturer_url && a.datasheet_url == b.datasheet_url && eq(a.quantity, b.quantity) &&
+           a.supplier == b.supplier && a.notes == b.notes && a.supplier_url == b.supplier_url &&
+           a.datasheet_url == b.datasheet_url && eq(a.quantity, b.quantity) &&
            eq(a.reorder_level, b.reorder_level) && eq(a.unit_cost, b.unit_cost) && eq(a.unit_price, b.unit_price);
 }
 
@@ -233,19 +236,19 @@ void log_movement(sqlite3* db, long long item_id, const std::string& sku, const 
     s.step();
 }
 
-// Manufacturer websites are remembered: an item that names a known manufacturer but has no
-// website gets the saved one, and an item that has both updates the saved website.
-void apply_manufacturer(sqlite3* db, Item& it) {
-    if (it.manufacturer.empty()) return;
-    if (it.manufacturer_url.empty()) {
-        Stmt s(db, "SELECT website FROM manufacturers WHERE name = ?");
-        s.bind(1, it.manufacturer);
-        if (s.step()) it.manufacturer_url = s.text(0);
+// Supplier websites are remembered: an item that names a known supplier but has no website
+// gets the saved one, and an item that has both updates the saved website.
+void apply_supplier(sqlite3* db, Item& it) {
+    if (it.supplier.empty()) return;
+    if (it.supplier_url.empty()) {
+        Stmt s(db, "SELECT website FROM suppliers WHERE name = ?");
+        s.bind(1, it.supplier);
+        if (s.step()) it.supplier_url = s.text(0);
     } else {
         Stmt s(db,
-               "INSERT INTO manufacturers (name, website, updated_at) VALUES (?,?,?) "
+               "INSERT INTO suppliers (name, website, updated_at) VALUES (?,?,?) "
                "ON CONFLICT(name) DO UPDATE SET website = excluded.website, updated_at = excluded.updated_at");
-        s.bind(1, it.manufacturer).bind(2, it.manufacturer_url).bind(3, now_iso());
+        s.bind(1, it.supplier).bind(2, it.supplier_url).bind(3, now_iso());
         s.step();
     }
 }
@@ -260,12 +263,12 @@ long long insert_item(sqlite3* db, const Item& it, const std::string& kind = "cr
     std::string ts = now_iso();
     Stmt s(db,
            "INSERT INTO items (sku, name, category, location, supplier, quantity, reorder_level, unit_cost, "
-           "unit_price, notes, created_at, updated_at, manufacturer, manufacturer_url, datasheet_url) "
-           "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+           "unit_price, notes, created_at, updated_at, supplier_url, datasheet_url) "
+           "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     s.bind(1, it.sku).bind(2, it.name).bind(3, it.category).bind(4, it.location).bind(5, it.supplier);
     s.bind(6, it.quantity).bind(7, it.reorder_level).bind(8, it.unit_cost).bind(9, it.unit_price);
     s.bind(10, it.notes).bind(11, ts).bind(12, ts);
-    s.bind(13, it.manufacturer).bind(14, it.manufacturer_url).bind(15, it.datasheet_url);
+    s.bind(13, it.supplier_url).bind(14, it.datasheet_url);
     s.step();
     long long id = sqlite3_last_insert_rowid(db);
     log_movement(db, id, it.sku, it.name, it.quantity, it.quantity, kind, note);
@@ -275,12 +278,10 @@ long long insert_item(sqlite3* db, const Item& it, const std::string& kind = "cr
 void update_row(sqlite3* db, const ItemRow& row, const Item& it, const std::string& kind, const std::string& note) {
     Stmt s(db,
            "UPDATE items SET sku=?, name=?, category=?, location=?, supplier=?, quantity=?, reorder_level=?, "
-           "unit_cost=?, unit_price=?, notes=?, updated_at=?, manufacturer=?, manufacturer_url=?, datasheet_url=? "
-           "WHERE id=?");
+           "unit_cost=?, unit_price=?, notes=?, updated_at=?, supplier_url=?, datasheet_url=? WHERE id=?");
     s.bind(1, it.sku).bind(2, it.name).bind(3, it.category).bind(4, it.location).bind(5, it.supplier);
     s.bind(6, it.quantity).bind(7, it.reorder_level).bind(8, it.unit_cost).bind(9, it.unit_price);
-    s.bind(10, it.notes).bind(11, now_iso()).bind(12, it.manufacturer).bind(13, it.manufacturer_url);
-    s.bind(14, it.datasheet_url).bind(15, row.id);
+    s.bind(10, it.notes).bind(11, now_iso()).bind(12, it.supplier_url).bind(13, it.datasheet_url).bind(14, row.id);
     s.step();
     double change = it.quantity - row.item.quantity;
     if (std::fabs(change) > 1e-9) log_movement(db, row.id, it.sku, it.name, change, it.quantity, kind, note);
@@ -295,7 +296,7 @@ json ImportSummary::to_json() const {
             {"removed", removed}, {"skipped", sk},      {"dry_run", dry_run}, {"sheet", sheet}};
 }
 
-Store::Store(const std::string& path_utf8) {
+Store::Store(const std::string& path_utf8) : path_(path_utf8) {
     if (sqlite3_open_v2(path_utf8.c_str(), &db_, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
                         nullptr) != SQLITE_OK) {
         std::string msg = db_ ? sqlite3_errmsg(db_) : "out of memory";
@@ -304,6 +305,10 @@ Store::Store(const std::string& path_utf8) {
         throw std::runtime_error(msg);
     }
     sqlite3_busy_timeout(db_, 5000);
+    ensure_schema();
+}
+
+void Store::ensure_schema() {
     exec(db_, kSchema);
     // Bring databases from older versions up to date.
     std::set<std::string> have;
@@ -317,6 +322,243 @@ Store::Store(const std::string& path_utf8) {
 
 Store::~Store() { sqlite3_close(db_); }
 
+// ------------------------------------------------------------------ settings
+
+namespace {
+
+const std::vector<std::string> kCurrencies = {"USD", "EUR", "GBP", "CAD", "AUD", "NZD", "CHF", "JPY", "CNY", "INR",
+                                              "MXN", "BRL", "ZAR", "SEK", "NOK", "DKK", "PLN", "SGD", "HKD", "AED"};
+
+json default_settings() {
+    return {{"currency", "USD"},     {"theme", "system"},  {"default_reorder_level", 0},
+            {"default_category", ""}, {"auto_backup", true}, {"backup_keep", 10}};
+}
+
+// Checks one setting; throws ApiError with a readable message if it's not allowed.
+json check_setting(const std::string& key, const json& v) {
+    if (key == "currency") {
+        std::string c = v.is_string() ? v.get<std::string>() : "";
+        if (std::find(kCurrencies.begin(), kCurrencies.end(), c) == kCurrencies.end()) throw ApiError("Unknown currency");
+        return c;
+    }
+    if (key == "theme") {
+        std::string t = v.is_string() ? v.get<std::string>() : "";
+        if (t != "system" && t != "light" && t != "dark") throw ApiError("Unknown theme");
+        return t;
+    }
+    if (key == "default_reorder_level") return tidy_number(parse_number(Value::from_json(v), "Default reorder level"));
+    if (key == "default_category") return clean_text(Value::from_json(v), "category");
+    if (key == "auto_backup") {
+        if (!v.is_boolean()) throw ApiError("Automatic backup must be on or off");
+        return v;
+    }
+    if (key == "backup_keep") {
+        double n = parse_number(Value::from_json(v), "Backups to keep");
+        if (n < 1 || n > 100 || n != std::floor(n)) throw ApiError("Backups to keep must be a whole number from 1 to 100");
+        return static_cast<int>(n);
+    }
+    throw ApiError("Unknown setting: " + key);
+}
+
+std::filesystem::path u8path(const std::string& s) {
+    return std::filesystem::path(reinterpret_cast<const char8_t*>(s.c_str()));
+}
+
+std::string path_utf8(const std::filesystem::path& p) {
+    auto u = p.u8string();
+    return std::string(u.begin(), u.end());
+}
+
+// "2026-11-16_143005" - sortable, safe in file names.
+std::string file_stamp() {
+    std::string s = now_iso().substr(0, 19);
+    std::replace(s.begin(), s.end(), 'T', '_');
+    s.erase(std::remove(s.begin(), s.end(), ':'), s.end());
+    return s;
+}
+
+void copy_database(sqlite3* from, sqlite3* to) {
+    sqlite3_backup* b = sqlite3_backup_init(to, "main", from, "main");
+    if (!b) throw std::runtime_error(sqlite3_errmsg(to));
+    int rc = sqlite3_backup_step(b, -1);
+    sqlite3_backup_finish(b);
+    if (rc != SQLITE_DONE) throw std::runtime_error(sqlite3_errstr(rc));
+}
+
+std::filesystem::path temp_file(const char* prefix) {
+    static std::atomic<unsigned> counter{0};
+    auto t = std::chrono::steady_clock::now().time_since_epoch().count();
+    return std::filesystem::temp_directory_path() /
+           (std::string(prefix) + std::to_string(t) + "-" + std::to_string(counter++) + ".db");
+}
+
+std::string read_file(const std::filesystem::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+}  // namespace
+
+json Store::get_settings() {
+    std::lock_guard lock(mutex_);
+    json s = default_settings();
+    Stmt q(db_, "SELECT value FROM settings WHERE key = 'app'");
+    if (q.step()) {
+        json saved = json::parse(q.text(0), nullptr, false);
+        if (saved.is_object())
+            for (auto& [k, v] : saved.items()) {
+                if (!s.contains(k)) continue;
+                try { s[k] = check_setting(k, v); } catch (const ApiError&) { /* keep the default */ }
+            }
+    }
+    return s;
+}
+
+json Store::save_settings(const json& changes) {
+    if (!changes.is_object()) throw ApiError("Invalid settings");
+    json s = get_settings();
+    for (auto& [k, v] : changes.items()) s[k] = check_setting(k, v);
+    std::lock_guard lock(mutex_);
+    Stmt q(db_, "INSERT INTO settings (key, value) VALUES ('app', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    q.bind(1, s.dump());
+    q.step();
+    return s;
+}
+
+// ------------------------------------------------------------------ backup & restore
+
+std::string Store::backups_dir() const { return path_utf8(u8path(path_).parent_path() / "Backups"); }
+
+void Store::backup_to(const std::string& dest_utf8) {
+    std::lock_guard lock(mutex_);
+    std::error_code ec;
+    std::filesystem::create_directories(u8path(dest_utf8).parent_path(), ec);
+    sqlite3* out = nullptr;
+    if (sqlite3_open_v2(dest_utf8.c_str(), &out, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr) != SQLITE_OK) {
+        std::string msg = out ? sqlite3_errmsg(out) : "out of memory";
+        sqlite3_close(out);
+        throw std::runtime_error("Couldn't create the backup file: " + msg);
+    }
+    try {
+        copy_database(db_, out);
+    } catch (...) {
+        sqlite3_close(out);
+        throw;
+    }
+    sqlite3_close(out);
+}
+
+std::string Store::backup_bytes() {
+    auto tmp = temp_file("im-backup-");
+    backup_to(path_utf8(tmp));
+    std::string bytes = read_file(tmp);
+    std::error_code ec;
+    std::filesystem::remove(tmp, ec);
+    return bytes;
+}
+
+json Store::list_backups() {
+    json out = json::array();
+    std::error_code ec;
+    std::vector<std::filesystem::directory_entry> files;
+    for (const auto& e : std::filesystem::directory_iterator(u8path(backups_dir()), ec))
+        if (e.is_regular_file(ec) && e.path().extension() == ".db") files.push_back(e);
+    std::sort(files.begin(), files.end(),
+              [](const auto& a, const auto& b) { return a.last_write_time() > b.last_write_time(); });
+    for (const auto& e : files) {
+        std::string name = path_utf8(e.path().filename());
+        auto when = std::chrono::clock_cast<std::chrono::system_clock>(e.last_write_time(ec));
+        long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(when.time_since_epoch()).count();
+        std::string kind = name.rfind("auto-", 0) == 0 ? "auto" : name.rfind("before-restore-", 0) == 0 ? "before-restore" : "other";
+        out.push_back({{"name", name}, {"size", static_cast<long long>(e.file_size(ec))}, {"modified", ms}, {"kind", kind}});
+    }
+    return out;
+}
+
+int Store::restore_from_bytes(const std::string& bytes) {
+    const std::string not_backup = "This file isn't an Inventory Manager backup.";
+    if (bytes.size() < 100 || bytes.compare(0, 16, std::string("SQLite format 3\0", 16)) != 0) throw ApiError(not_backup);
+
+    auto tmp = temp_file("im-restore-");
+    {
+        std::ofstream outf(tmp, std::ios::binary);
+        outf.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (!outf) throw std::runtime_error("Couldn't write a temporary file");
+    }
+    sqlite3* src = nullptr;
+    auto cleanup = [&] {
+        sqlite3_close(src);
+        std::error_code ec;
+        std::filesystem::remove(tmp, ec);
+    };
+    try {
+        if (sqlite3_open_v2(path_utf8(tmp).c_str(), &src, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) throw ApiError(not_backup);
+        // Must be intact and look like an inventory database.
+        try {
+            Stmt check(src, "PRAGMA quick_check");
+            if (!check.step() || check.text(0) != "ok") throw ApiError("That backup file is damaged and can't be restored.");
+            std::set<std::string> cols;
+            Stmt info(src, "PRAGMA table_info(items)");
+            while (info.step()) cols.insert(info.text(1));
+            Stmt mv(src, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'movements'");
+            if (!cols.count("sku") || !cols.count("name") || !cols.count("quantity") || !mv.step()) throw ApiError(not_backup);
+        } catch (const std::runtime_error& e) {
+            if (dynamic_cast<const ApiError*>(&e)) throw;
+            throw ApiError(not_backup);
+        }
+
+        std::lock_guard lock(mutex_);
+        // Keep a copy of what's being replaced, so a restore can always be undone.
+        backup_to(path_utf8(u8path(backups_dir()) / ("before-restore-" + file_stamp() + ".db")));
+        copy_database(src, db_);
+        ensure_schema();
+        Stmt c(db_, "SELECT COUNT(*) FROM items");
+        int count = c.step() ? static_cast<int>(c.i64(0)) : 0;
+        cleanup();
+        return count;
+    } catch (...) {
+        cleanup();
+        throw;
+    }
+}
+
+int Store::restore_from_backups_dir(const std::string& name) {
+    if (name.empty() || name.find_first_of("/\\:") != std::string::npos || name.find("..") != std::string::npos ||
+        name.size() < 4 || name.compare(name.size() - 3, 3, ".db") != 0)
+        throw ApiError("Unknown backup");
+    auto p = u8path(backups_dir()) / u8path(name);
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(p, ec)) throw NotFound("That backup no longer exists.");
+    return restore_from_bytes(read_file(p));
+}
+
+bool Store::auto_backup_if_due() {
+    json s = get_settings();
+    if (!s.value("auto_backup", true)) return false;
+    int keep = s.value("backup_keep", 10);
+    auto dir = u8path(backups_dir());
+    std::error_code ec;
+    std::vector<std::filesystem::directory_entry> autos;
+    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+        std::string n = path_utf8(e.path().filename());
+        if (n.rfind("auto-", 0) == 0 && e.path().extension() == ".db") autos.push_back(e);
+    }
+    std::sort(autos.begin(), autos.end(), [](const auto& a, const auto& b) { return a.path().filename() > b.path().filename(); });
+    bool made = false;
+    if (autos.empty() || std::filesystem::file_time_type::clock::now() - autos.front().last_write_time(ec) > std::chrono::hours(20)) {
+        backup_to(path_utf8(dir / ("auto-" + file_stamp() + ".db")));
+        made = true;
+        autos.clear();
+        for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+            std::string n = path_utf8(e.path().filename());
+            if (n.rfind("auto-", 0) == 0 && e.path().extension() == ".db") autos.push_back(e);
+        }
+        std::sort(autos.begin(), autos.end(), [](const auto& a, const auto& b) { return a.path().filename() > b.path().filename(); });
+    }
+    for (size_t i = static_cast<size_t>(keep); i < autos.size(); ++i) std::filesystem::remove(autos[i].path(), ec);
+    return made;
+}
+
 json Store::list_items() {
     std::lock_guard lock(mutex_);
     Stmt s(db_, std::string(kItemSelect) + " ORDER BY items.sku COLLATE NOCASE");
@@ -325,9 +567,9 @@ json Store::list_items() {
     return out;
 }
 
-json Store::list_manufacturers() {
+json Store::list_suppliers() {
     std::lock_guard lock(mutex_);
-    Stmt s(db_, "SELECT name, website FROM manufacturers ORDER BY name COLLATE NOCASE");
+    Stmt s(db_, "SELECT name, website FROM suppliers ORDER BY name COLLATE NOCASE");
     json out = json::array();
     while (s.step()) out.push_back({{"name", s.text(0)}, {"website", s.text(1)}});
     return out;
@@ -378,7 +620,7 @@ json Store::create_item(const Record& data) {
     std::lock_guard lock(mutex_);
     Transaction tx(db_);
     check_sku_free(db_, it.sku);
-    apply_manufacturer(db_, it);
+    apply_supplier(db_, it);
     long long id = insert_item(db_, it);
     tx.commit();
     return item_json(fetch(db_, id));
@@ -392,7 +634,7 @@ json Store::update_item(long long id, const Record& data) {
     for (const auto& [k, v] : data) merged[k] = v;
     Item it = validate_item(merged);
     check_sku_free(db_, it.sku, id);
-    apply_manufacturer(db_, it);
+    apply_supplier(db_, it);
     update_row(db_, row, it, "edited", "Quantity changed in item details");
     tx.commit();
     return item_json(fetch(db_, id));
@@ -512,7 +754,7 @@ ImportSummary Store::import_records(const std::vector<std::pair<int, Record>>& r
             Record base = found ? item_to_record(existing.item) : Record{};
             for (const auto& [k, v] : raw) base[k] = v;
             it = validate_item(base);
-            apply_manufacturer(db_, it);
+            apply_supplier(db_, it);
         } catch (const ApiError& e) {
             sum.skipped.emplace_back(rownum, e.what());
             continue;

@@ -13,12 +13,15 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <wrl.h>
 
 #include <WebView2.h>
 
 #include <algorithm>
 #include <filesystem>
+#include <cwctype>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -34,6 +37,7 @@ namespace {
 const wchar_t* kWindowClass = L"InventoryManagerWindow";
 const wchar_t* kTitle = L"Inventory Manager";
 const wchar_t* kMutexName = L"InventoryManagerSingleInstance";
+const UINT WM_APP_RUN = WM_APP + 1;  // runs a queued function on the window thread
 const wchar_t* kRegKey = L"Software\\Inventory Manager";
 
 struct Options {
@@ -113,6 +117,42 @@ Options parse_args() {
     return o;
 }
 
+// Runs fn on the window's thread after the current event finishes (dialogs can't open inside some callbacks).
+void run_async(std::function<void()> fn) {
+    PostMessageW(g_app.hwnd, WM_APP_RUN, 0, reinterpret_cast<LPARAM>(new std::function<void()>(std::move(fn))));
+}
+
+// Standard Windows "Save As" dialog. Returns false if the user cancels.
+bool ask_save_path(const std::wstring& suggested, std::wstring& chosen) {
+    ComPtr<IFileSaveDialog> dlg;
+    if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return false;
+    std::filesystem::path p(suggested);
+    std::wstring ext = p.extension().wstring();
+    for (auto& c : ext) c = static_cast<wchar_t>(towlower(c));
+    COMDLG_FILTERSPEC types[2] = {{L"All files", L"*.*"}, {L"All files", L"*.*"}};
+    UINT count = 1;
+    if (ext == L".xlsx") { types[0] = {L"Excel workbook (*.xlsx)", L"*.xlsx"}; count = 2; }
+    else if (ext == L".csv") { types[0] = {L"CSV file (*.csv)", L"*.csv"}; count = 2; }
+    else if (ext == L".db") { types[0] = {L"Inventory Manager backup (*.db)", L"*.db"}; count = 2; }
+    dlg->SetFileTypes(count, types);
+    dlg->SetFileName(p.filename().c_str());
+    if (ext.size() > 1) dlg->SetDefaultExtension(ext.c_str() + 1);
+    ComPtr<IShellItem> folder;
+    if (p.has_parent_path() &&
+        SUCCEEDED(SHCreateItemFromParsingName(p.parent_path().c_str(), nullptr, IID_PPV_ARGS(&folder))))
+        dlg->SetDefaultFolder(folder.Get());
+    FILEOPENDIALOGOPTIONS opts = 0;
+    dlg->GetOptions(&opts);
+    dlg->SetOptions(opts | FOS_OVERWRITEPROMPT | FOS_FORCEFILESYSTEM);
+    if (FAILED(dlg->Show(g_app.hwnd))) return false;
+    ComPtr<IShellItem> item;
+    PWSTR path = nullptr;
+    if (FAILED(dlg->GetResult(&item)) || FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) return false;
+    chosen = path;
+    CoTaskMemFree(path);
+    return true;
+}
+
 void open_in_browser() { ShellExecuteW(nullptr, L"open", g_app.url.c_str(), nullptr, nullptr, SW_SHOWNORMAL); }
 
 // ------------------------------------------------------------------ window position memory
@@ -184,6 +224,9 @@ void create_webview() {
                             ComPtr<ICoreWebView2Settings> settings;
                             g_app.webview->get_Settings(&settings);
                             settings->put_IsStatusBarEnabled(FALSE);
+                            // Let the page's menu shortcuts (Ctrl+N, Ctrl+F, ...) work instead of browser ones.
+                            ComPtr<ICoreWebView2Settings3> settings3;
+                            if (SUCCEEDED(settings.As(&settings3))) settings3->put_AreBrowserAcceleratorKeysEnabled(FALSE);
 #ifdef NDEBUG
                             settings->put_AreDevToolsEnabled(FALSE);
 #endif
@@ -200,6 +243,43 @@ void create_webview() {
                                     })
                                     .Get(),
                                 nullptr);
+
+                            // File > Exit in the page's menu asks the window to close.
+                            g_app.webview->add_WebMessageReceived(
+                                Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+                                    [](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                                        LPWSTR msg = nullptr;
+                                        if (SUCCEEDED(args->TryGetWebMessageAsString(&msg)) && msg && std::wstring(msg) == L"exit")
+                                            PostMessageW(g_app.hwnd, WM_CLOSE, 0, 0);
+                                        CoTaskMemFree(msg);
+                                        return S_OK;
+                                    })
+                                    .Get(),
+                                nullptr);
+
+                            // Downloads (exports, backups) ask where to save, like any Windows program.
+                            ComPtr<ICoreWebView2_4> webview4;
+                            if (SUCCEEDED(g_app.webview.As(&webview4))) {
+                                webview4->add_DownloadStarting(
+                                    Callback<ICoreWebView2DownloadStartingEventHandler>(
+                                        [](ICoreWebView2*, ICoreWebView2DownloadStartingEventArgs* args) -> HRESULT {
+                                            ComPtr<ICoreWebView2Deferral> deferral;
+                                            args->GetDeferral(&deferral);
+                                            ComPtr<ICoreWebView2DownloadStartingEventArgs> a(args);
+                                            run_async([a, deferral] {
+                                                LPWSTR path = nullptr;
+                                                a->get_ResultFilePath(&path);
+                                                std::wstring chosen;
+                                                if (ask_save_path(path ? path : L"", chosen)) a->put_ResultFilePath(chosen.c_str());
+                                                else a->put_Cancel(TRUE);
+                                                CoTaskMemFree(path);
+                                                deferral->Complete();
+                                            });
+                                            return S_OK;
+                                        })
+                                        .Get(),
+                                    nullptr);
+                            }
 
                             resize_webview();
                             g_app.webview->Navigate(g_app.url.c_str());
@@ -269,6 +349,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_LBUTTONUP:
             if (g_app.browser_mode) open_in_browser();
             return 0;
+        case WM_APP_RUN: {
+            std::unique_ptr<std::function<void()>> fn(reinterpret_cast<std::function<void()>*>(lp));
+            (*fn)();
+            return 0;
+        }
         case WM_CLOSE:
             save_placement(hwnd);
             DestroyWindow(hwnd);
@@ -352,6 +437,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
         store->seed_from_file(narrow((exe_dir() / L"inventory_management.xlsx").wstring()));
     } catch (const std::exception&) {
         // Not fatal - the inventory just starts empty and can be imported later.
+    }
+    if (!opt.headless) {
+        try {
+            store->auto_backup_if_due();  // daily copy in the Backups folder (Settings can turn this off)
+        } catch (const std::exception&) {
+        }
     }
 
     AppServer server(*store, load_asset);

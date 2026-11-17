@@ -46,7 +46,7 @@ using Record = std::map<std::string, Value>;
 
 struct Item {
     std::string sku, name, category, location, supplier, notes;
-    std::string manufacturer, manufacturer_url, datasheet_url;
+    std::string supplier_url, datasheet_url;
     double quantity = 0, reorder_level = 0, unit_cost = 0, unit_price = 0;
 };
 

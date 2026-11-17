@@ -15,5 +15,5 @@ struct SheetData {
 // Finds the header row (needs "SKU" and "Item Name" columns) and returns the rows under it.
 SheetData read_spreadsheet(const std::string& bytes);
 
-std::string build_xlsx_export(const json& items, const json& movements);
+std::string build_xlsx_export(const json& items, const json& movements, const std::string& currency);
 std::string build_csv_export(const json& items);

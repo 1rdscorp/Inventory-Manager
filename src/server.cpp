@@ -1,10 +1,12 @@
 #include "server.h"
 
 #include <cctype>
+#include <filesystem>
 #include <cstdio>
 #include <ctime>
 
 #include <httplib.h>
+#include <shellapi.h>
 
 #include "spreadsheet.h"
 #include "store.h"
@@ -12,7 +14,8 @@
 namespace {
 
 constexpr size_t kMaxJsonBytes = 1'000'000;
-constexpr size_t kMaxUploadBytes = 25u * 1024 * 1024;
+constexpr size_t kMaxUploadBytes = 25u * 1024 * 1024;     // imports and datasheet files
+constexpr size_t kMaxRequestBytes = 1024u * 1024 * 1024;  // restoring a backup (can hold many datasheets)
 const char* kAppId = "inventory-manager";
 const char* kXlsxMime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
@@ -82,7 +85,7 @@ void AppServer::stop() {
 
 void AppServer::routes() {
     auto& s = *svr_;
-    s.set_payload_max_length(kMaxUploadBytes);
+    s.set_payload_max_length(kMaxRequestBytes);
 
     s.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
         if (loopback_) {
@@ -144,7 +147,7 @@ void AppServer::routes() {
     s.Get("/api/items", safe([this](const httplib::Request&, httplib::Response& res) {
         send_json(res, {{"items", store_.list_items()},
                         {"default_categories", kDefaultCategories},
-                        {"manufacturers", store_.list_manufacturers()}});
+                        {"suppliers", store_.list_suppliers()}});
     }));
     s.Post("/api/items", safe([this](const httplib::Request& req, httplib::Response& res) {
         send_json(res, {{"item", store_.create_item(item_record(parse_json_body(req)))}}, 201);
@@ -167,6 +170,7 @@ void AppServer::routes() {
     }));
     // ---- attached datasheet files
     s.Post(R"(/api/items/(\d+)/datasheet)", safe([this](const httplib::Request& req, httplib::Response& res) {
+        if (req.body.size() > kMaxUploadBytes) throw ApiError("That file is too large (limit 25 MB)", 413);
         send_json(res, {{"item", store_.save_datasheet(std::stoll(req.matches[1]),
                                                        clean_filename(req.get_param_value("filename")), req.body)}});
     }));
@@ -198,6 +202,50 @@ void AppServer::routes() {
         res.set_content(bytes, type != inline_types.end() ? type->second : "application/octet-stream");
     }));
 
+    // ---- settings, backups, app info
+    s.Get("/api/settings", safe([this](const httplib::Request&, httplib::Response& res) {
+        send_json(res, store_.get_settings());
+    }));
+    s.Put("/api/settings", safe([this](const httplib::Request& req, httplib::Response& res) {
+        send_json(res, store_.save_settings(parse_json_body(req)));
+    }));
+    s.Get("/api/info", safe([this](const httplib::Request&, httplib::Response& res) {
+        send_json(res, {{"version", APP_VERSION}, {"data_file", store_.data_path()}, {"backups_folder", store_.backups_dir()}});
+    }));
+    s.Get("/api/backup", safe([this](const httplib::Request&, httplib::Response& res) {
+        std::string stamp = now_iso().substr(0, 16);
+        stamp[10] = ' ';
+        stamp.erase(13, 1);  // "2026-11-16 1430"
+        res.set_header("Cache-Control", "no-store");
+        res.set_header("Content-Disposition", "attachment; filename=\"Inventory backup " + stamp + ".db\"");
+        res.set_content(store_.backup_bytes(), "application/octet-stream");
+    }));
+    s.Get("/api/backups", safe([this](const httplib::Request&, httplib::Response& res) {
+        send_json(res, {{"folder", store_.backups_dir()}, {"backups", store_.list_backups()}});
+    }));
+    s.Post("/api/restore", safe([this](const httplib::Request& req, httplib::Response& res) {
+        int count = req.has_param("name") ? store_.restore_from_backups_dir(req.get_param_value("name"))
+                                          : store_.restore_from_bytes(req.body);
+        send_json(res, {{"ok", true}, {"items", count}});
+    }));
+    // Opens the data or backups folder in File Explorer - only for someone sitting at this computer.
+    s.Post("/api/open-folder", safe([this](const httplib::Request& req, httplib::Response& res) {
+        if (req.remote_addr != "127.0.0.1" && req.remote_addr != "::1")
+            throw ApiError("Folders can only be opened on the computer running Inventory Manager", 403);
+        std::string folder = req.get_param_value("which") == "backups" ? store_.backups_dir() : store_.data_path();
+        if (req.get_param_value("which") == "backups") {
+            std::error_code ec;
+            std::filesystem::create_directories(std::filesystem::path(reinterpret_cast<const char8_t*>(folder.c_str())), ec);
+        } else {
+            folder = folder.substr(0, folder.find_last_of("/\\"));
+        }
+        int n = MultiByteToWideChar(CP_UTF8, 0, folder.data(), static_cast<int>(folder.size()), nullptr, 0);
+        std::wstring w(n, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, folder.data(), static_cast<int>(folder.size()), w.data(), n);
+        ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        send_json(res, {{"ok", true}});
+    }));
+
     s.Get("/api/movements", safe([this](const httplib::Request& req, httplib::Response& res) {
         int limit = 2000;
         try {
@@ -208,6 +256,7 @@ void AppServer::routes() {
     }));
 
     s.Post("/api/import", safe([this](const httplib::Request& req, httplib::Response& res) {
+        if (req.body.size() > kMaxUploadBytes) throw ApiError("That file is too large to import (limit 25 MB)", 413);
         std::string mode = req.has_param("mode") ? req.get_param_value("mode") : "merge";
         std::string dry = req.get_param_value("dry_run");
         std::string filename = clean_filename(req.get_param_value("filename"));
@@ -221,7 +270,7 @@ void AppServer::routes() {
     s.Get("/api/export.xlsx", safe([this](const httplib::Request&, httplib::Response& res) {
         res.set_header("Cache-Control", "no-store");
         res.set_header("Content-Disposition", "attachment; filename=\"inventory-" + today() + ".xlsx\"");
-        res.set_content(build_xlsx_export(store_.list_items(), store_.movements(20000)), kXlsxMime);
+        res.set_content(build_xlsx_export(store_.list_items(), store_.movements(20000), store_.get_settings().value("currency", "USD")), kXlsxMime);
     }));
     s.Get("/api/export.csv", safe([this](const httplib::Request&, httplib::Response& res) {
         res.set_header("Cache-Control", "no-store");
@@ -231,7 +280,7 @@ void AppServer::routes() {
 
     s.set_error_handler([](const httplib::Request& req, httplib::Response& res) {
         if (req.path.rfind("/api/", 0) == 0 && res.body.empty()) {
-            if (res.status == 413) send_json(res, {{"error", "That file is too large to upload (limit 25 MB)"}}, 413);
+            if (res.status == 413) send_json(res, {{"error", "That file is too large to upload"}}, 413);
             else if (res.status == 404) send_json(res, {{"error", "Not found"}}, 404);
         }
     });

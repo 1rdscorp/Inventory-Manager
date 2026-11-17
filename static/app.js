@@ -5,7 +5,11 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
-  const moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+  let moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+  function setCurrency(code) {
+    try { moneyFmt = new Intl.NumberFormat(undefined, { style: 'currency', currency: code || 'USD' }); }
+    catch { moneyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }); }
+  }
   const numFmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
   const fmtMoney = (v) => moneyFmt.format(v || 0);
   const fmtNum = (v) => numFmt.format(v || 0);
@@ -139,10 +143,13 @@
   const state = {
     items: [],
     defaults: [],
-    manufacturers: [],  // [{name, website}] remembered by the app
+    suppliers: [],      // [{name, website}] remembered by the app
+    settings: {},       // from /api/settings
+    info: {},           // version and file locations, from /api/info
+    selectedId: null,   // highlighted row in the inventory list
     pendingFile: null,  // datasheet file chosen in the item dialog, uploaded on save
     removeFile: false,  // remove the attached datasheet on save
-    mfrAutoUrl: '',     // website auto-filled from the manufacturer name
+    supAutoUrl: '',     // website auto-filled from the supplier name
     movements: [],
     movementsStale: true,
     view: 'inventory',
@@ -158,10 +165,10 @@
   async function loadItems() {
     const data = await api('GET', '/api/items');
     state.defaults = data.default_categories || [];
-    state.manufacturers = data.manufacturers || [];
+    state.suppliers = data.suppliers || [];
     state.items = data.items.map((it) => ({
       ...it,
-      _hay: [it.sku, it.name, it.category, it.location, it.supplier, it.manufacturer, it.notes].join('\u0001').toLowerCase(),
+      _hay: [it.sku, it.name, it.category, it.location, it.supplier, it.notes].join('\u0001').toLowerCase(),
     }));
     state.movementsStale = true;
   }
@@ -187,7 +194,7 @@
     const out = [];
     if (it.datasheet_url) out.push(`<a class="row-link" href="${esc(it.datasheet_url)}" target="_blank" rel="noopener noreferrer" title="Open datasheet link">${ICONS.doc}<span class="sr-only">Datasheet</span></a>`);
     if (it.datasheet_file) out.push(`<a class="row-link" href="${datasheetFileUrl(it)}" target="_blank" rel="noopener noreferrer" title="Open attached file: ${esc(it.datasheet_file)}">${ICONS.clip}<span class="sr-only">Datasheet file</span></a>`);
-    if (it.manufacturer_url) out.push(`<a class="row-link" href="${esc(it.manufacturer_url)}" target="_blank" rel="noopener noreferrer" title="Open ${esc(it.manufacturer || 'manufacturer')} website">${ICONS.globe}<span class="sr-only">Manufacturer website</span></a>`);
+    if (it.supplier_url) out.push(`<a class="row-link" href="${esc(it.supplier_url)}" target="_blank" rel="noopener noreferrer" title="Open ${esc(it.supplier || 'supplier')} website">${ICONS.globe}<span class="sr-only">Supplier website</span></a>`);
     return out.length ? `<span class="row-links">${out.join('')}</span>` : '';
   }
 
@@ -217,8 +224,6 @@
     fillDatalist($('#dlCategories'), allCats);
     fillDatalist($('#dlLocations'), distinct('location'));
     fillDatalist($('#dlSuppliers'), distinct('supplier'));
-    fillDatalist($('#dlManufacturers'),
-      [...new Set([...state.manufacturers.map((m) => m.name), ...distinct('manufacturer')])].sort(collator.compare));
     const n = state.items.filter((it) => it.status === 'Reorder').length;
     const badge = $('#reorderBadge');
     badge.textContent = n;
@@ -258,13 +263,12 @@
     const tbody = $('#itemsTable tbody');
 
     tbody.innerHTML = list.map((it) => `
-      <tr data-id="${it.id}" tabindex="0" class="${it.status === 'Reorder' ? 'is-low' : ''}">
+      <tr data-id="${it.id}" tabindex="0" aria-selected="${it.id === state.selectedId}" class="${it.status === 'Reorder' ? 'is-low' : ''}${it.id === state.selectedId ? ' is-selected' : ''}">
         <td class="mono nowrap">${hl(it.sku, terms)}</td>
-        <td class="name"><span class="name-line">${hl(it.name, terms)}${linkIcons(it)}</span>${it.manufacturer ? `<div class="sub mfr-sub">${hl(it.manufacturer, terms)}</div>` : ''}${it.notes ? `<div class="sub">${hl(it.notes.length > 90 ? it.notes.slice(0, 90) + '…' : it.notes, terms)}</div>` : ''}</td>
+        <td class="name"><span class="name-line">${hl(it.name, terms)}${linkIcons(it)}</span>${it.notes ? `<div class="sub">${hl(it.notes.length > 90 ? it.notes.slice(0, 90) + '…' : it.notes, terms)}</div>` : ''}</td>
         <td class="nowrap">${hl(it.category, terms)}</td>
         <td class="nowrap hide-sm">${hl(it.location, terms)}</td>
         <td class="hide-sm">${hl(it.supplier, terms)}</td>
-        <td class="hide-md">${hl(it.manufacturer, terms)}</td>
         <td class="num qty">${fmtNum(it.quantity)}</td>
         <td class="num muted hide-sm">${fmtNum(it.reorder_level)}</td>
         <td class="num hide-sm">${fmtMoney(it.unit_cost)}</td>
@@ -449,7 +453,7 @@
   }
 
   // ---- links & attached file in the item dialog
-  const LINK_FIELDS = ['manufacturer_url', 'datasheet_url'];
+  const LINK_FIELDS = ['supplier_url', 'datasheet_url'];
 
   /** Same rules as the server: blank, http(s)://..., or a bare address like www.x.com. */
   function normalizeUrl(raw) {
@@ -472,20 +476,20 @@
   function websiteFor(name) {
     const n = name.trim().toLowerCase();
     if (!n) return '';
-    const known = state.manufacturers.find((m) => m.name.toLowerCase() === n);
+    const known = state.suppliers.find((m) => m.name.toLowerCase() === n);
     if (known && known.website) return known.website;
-    const item = state.items.find((it) => it.manufacturer.toLowerCase() === n && it.manufacturer_url);
-    return item ? item.manufacturer_url : '';
+    const item = state.items.find((it) => it.supplier.toLowerCase() === n && it.supplier_url);
+    return item ? item.supplier_url : '';
   }
 
   function autofillWebsite() {
-    const field = itemForm.elements.manufacturer_url;
+    const field = itemForm.elements.supplier_url;
     // Only fill an empty box, or replace a website we filled in ourselves.
-    if (field.value.trim() && field.value !== state.mfrAutoUrl) return;
-    const site = websiteFor(itemForm.elements.manufacturer.value);
+    if (field.value.trim() && field.value !== state.supAutoUrl) return;
+    const site = websiteFor(itemForm.elements.supplier.value);
     field.value = site;
-    state.mfrAutoUrl = site;
-    $('#mfrAutoNote').hidden = !site;
+    state.supAutoUrl = site;
+    $('#supAutoNote').hidden = !site;
     updateOpenButtons();
   }
 
@@ -535,24 +539,29 @@
     renderAttachment();
   });
 
-  async function openItemDialog(item = null) {
+  // item: edit it. template: add a new item pre-filled from another one (Duplicate).
+  async function openItemDialog(item = null, template = null) {
     state.editing = item;
     itemForm.reset();
     showError($('#itemError'), '');
-    $('#itemDialogTitle').textContent = item ? `Edit ${item.sku}` : 'Add item';
+    $('#itemDialogTitle').textContent = item ? `Edit ${item.sku}` : template ? `Duplicate ${template.sku}` : 'Add item';
     $('#saveItemBtn').textContent = item ? 'Save changes' : 'Add item';
     $('#deleteItemBtn').hidden = !item;
     $('#adjustFromItemBtn').hidden = !item;
     state.pendingFile = null;
     state.removeFile = false;
-    state.mfrAutoUrl = '';
-    $('#mfrAutoNote').hidden = true;
+    state.supAutoUrl = '';
+    $('#supAutoNote').hidden = true;
+    const FIELDS = ['sku', 'name', 'category', 'location', 'supplier', 'notes', ...LINK_FIELDS, ...NUM_FIELDS];
     if (item) {
-      for (const f of ['sku', 'name', 'category', 'location', 'supplier', 'notes', 'manufacturer', ...LINK_FIELDS, ...NUM_FIELDS]) {
-        itemForm.elements[f].value = item[f] ?? '';
-      }
-    } else if (state.category) {
-      itemForm.elements.category.value = state.category;
+      for (const f of FIELDS) itemForm.elements[f].value = item[f] ?? '';
+    } else if (template) {
+      for (const f of FIELDS) if (f !== 'sku' && f !== 'quantity') itemForm.elements[f].value = template[f] ?? '';
+    } else {
+      // New item: defaults from Settings, or the category currently being viewed.
+      itemForm.elements.category.value = state.category || state.settings.default_category || '';
+      const lvl = state.settings.default_reorder_level;
+      if (lvl) itemForm.elements.reorder_level.value = lvl;
     }
     updateOpenButtons();
     renderAttachment();
@@ -578,9 +587,9 @@
   itemForm.addEventListener('input', (e) => {
     const name = e.target.name;
     if (NUM_FIELDS.includes(name)) updateItemCalc();
-    if (name === 'manufacturer') autofillWebsite();
+    if (name === 'supplier') autofillWebsite();
     if (LINK_FIELDS.includes(name)) {
-      if (name === 'manufacturer_url') $('#mfrAutoNote').hidden = true;
+      if (name === 'supplier_url') $('#supAutoNote').hidden = true;
       updateOpenButtons();
       updateItemCalc();
     }
@@ -611,7 +620,7 @@
     for (const f of LINK_FIELDS) {
       const url = normalizeUrl(data[f]);
       if (url === null) {
-        const label = f === 'datasheet_url' ? 'Datasheet link' : 'Manufacturer website';
+        const label = f === 'datasheet_url' ? 'Datasheet link' : 'Supplier website';
         showError(err, `${label} must be a web address, like https://www.example.com`);
         itemForm.elements[f].focus();
         return;
@@ -647,9 +656,9 @@
     }
   });
 
-  $('#deleteItemBtn').addEventListener('click', async () => {
-    const item = state.editing;
-    if (!item) return;
+  $('#deleteItemBtn').addEventListener('click', () => { if (state.editing) deleteItem(state.editing, true); });
+
+  async function deleteItem(item, fromDialog = false) {
     const ok = await confirmBox({
       title: `Delete ${item.sku}?`,
       message: `“${item.name}” will be removed from your inventory. Its past stock changes stay in the Activity log.`,
@@ -658,14 +667,16 @@
     if (!ok) return;
     try {
       await api('DELETE', `/api/items/${item.id}`);
-      $('#itemDialog').close();
+      if (fromDialog) $('#itemDialog').close();
+      if (state.selectedId === item.id) state.selectedId = null;
       await loadItems();
       renderAll();
       toast(`Deleted ${item.sku}`);
     } catch (ex) {
-      showError($('#itemError'), ex.message);
+      if (fromDialog) showError($('#itemError'), ex.message);
+      else toast(ex.message, 'error');
     }
-  });
+  }
 
   $('#adjustFromItemBtn').addEventListener('click', () => {
     const item = state.editing;
@@ -858,32 +869,421 @@
     if (!th) return;
     const key = th.dataset.sort;
     const numeric = ['quantity', 'reorder_level', 'unit_cost', 'unit_price', 'total_value'].includes(key);
-    if (!key) return;
     state.sort = state.sort.key === key ? { key, dir: -state.sort.dir } : { key, dir: numeric ? -1 : 1 };
     renderInventory();
   });
 
-  // Row clicks (inventory, reorder list and activity rows open the item)
-  function onRowActivate(e) {
-    if (e.target.closest('a')) return;  // link icons open their page instead
-    const btn = e.target.closest('button[data-action]');
-    const tr = e.target.closest('tr[data-id]');
-    if (btn && tr) {
-      const item = findItem(Number(tr.dataset.id));
-      if (item) openAdjust(item, 'add');
-      return;
-    }
-    if (tr) {
-      const item = findItem(Number(tr.dataset.id));
-      if (item) openItemDialog(item);
-    }
+  // ------------------------------------------------------------------ selecting & opening items
+  // Click selects a row, double-click (or Enter) opens it, right-click shows the item menu.
+  const rowItem = (tr) => (tr ? findItem(Number(tr.dataset.id)) : null);
+  const selectedItem = () => (state.selectedId != null ? findItem(state.selectedId) : null);
+
+  function selectRow(tr, { focus = false } = {}) {
+    const tbody = tr.closest('tbody');
+    $$('tr.is-selected', tbody).forEach((r) => { r.classList.remove('is-selected'); r.setAttribute('aria-selected', 'false'); });
+    tr.classList.add('is-selected');
+    tr.setAttribute('aria-selected', 'true');
+    if (tbody.closest('#itemsTable')) state.selectedId = Number(tr.dataset.id);
+    if (focus) tr.focus();
   }
+
   for (const sel of ['#itemsTable tbody', '#reorderTable tbody', '#actTable tbody']) {
     const tb = $(sel);
-    tb.addEventListener('click', onRowActivate);
-    tb.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.target.matches('tr[data-id]')) onRowActivate(e);
+    tb.addEventListener('click', (e) => {
+      if (e.target.closest('a')) return;  // link icons open their page
+      const tr = e.target.closest('tr[data-id]');
+      if (!tr) return;
+      if (e.target.closest('button[data-action]')) {
+        const item = rowItem(tr);
+        if (item) openAdjust(item, 'add');
+        return;
+      }
+      selectRow(tr);
     });
+    tb.addEventListener('dblclick', (e) => {
+      if (e.target.closest('a, button')) return;
+      const item = rowItem(e.target.closest('tr[data-id]'));
+      if (item) openItemDialog(item);
+    });
+    tb.addEventListener('keydown', (e) => {
+      const tr = e.target.closest('tr[data-id]');
+      if (!tr || e.target !== tr) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const item = rowItem(tr);
+        if (item) openItemDialog(item);
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const step = (r) => (e.key === 'ArrowDown' ? r.nextElementSibling : r.previousElementSibling);
+        let next = step(tr);
+        while (next && !next.matches('tr[data-id]')) next = step(next);
+        if (next) selectRow(next, { focus: true });
+      } else if (e.key === 'Delete') {
+        e.preventDefault();
+        const item = rowItem(tr);
+        if (item) deleteItem(item);
+      } else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+        e.preventDefault();
+        const r = tr.getBoundingClientRect();
+        selectRow(tr);
+        showItemMenu(rowItem(tr), r.left + 40, r.bottom - 4);
+      }
+    });
+    tb.addEventListener('focusin', (e) => {
+      const tr = e.target.closest('tr[data-id]');
+      if (tr && e.target === tr) selectRow(tr);
+    });
+  }
+
+  // ------------------------------------------------------------------ menus (right-click and menu bar)
+  const ctx = $('#ctxMenu');
+  let ctxItems = [];
+  let menuOwner = null;  // the menu-bar button whose menu is open, if any
+
+  /** items: [{ label, shortcut, action, disabled, danger } | 'sep'] shown at (x, y). */
+  function showMenu(items, x, y, owner = null) {
+    closeMenu();
+    ctxItems = items;
+    menuOwner = owner;
+    ctx.innerHTML = items.map((it, i) => (it === 'sep'
+      ? '<div class="ctx-sep" role="separator"></div>'
+      : `<button type="button" role="menuitem" class="ctx-item${it.danger ? ' danger' : ''}" data-i="${i}"${it.disabled ? ' disabled' : ''}>
+          <span>${esc(it.label)}</span>${it.shortcut ? `<kbd>${esc(it.shortcut)}</kbd>` : ''}</button>`)).join('');
+    ctx.hidden = false;
+    // Keep the menu on screen.
+    const w = ctx.offsetWidth;
+    const h = ctx.offsetHeight;
+    ctx.style.left = `${Math.max(4, Math.min(x, innerWidth - w - 4))}px`;
+    ctx.style.top = `${Math.max(4, Math.min(y, innerHeight - h - 4))}px`;
+    if (owner) { owner.setAttribute('aria-expanded', 'true'); owner.classList.add('open'); }
+    ctx.querySelector('.ctx-item:not([disabled])')?.focus();
+  }
+
+  function closeMenu() {
+    if (ctx.hidden) return;
+    ctx.hidden = true;
+    ctx.innerHTML = '';
+    if (menuOwner) { menuOwner.setAttribute('aria-expanded', 'false'); menuOwner.classList.remove('open'); }
+    menuOwner = null;
+  }
+
+  ctx.addEventListener('click', (e) => {
+    const b = e.target.closest('.ctx-item');
+    if (!b || b.disabled) return;
+    const it = ctxItems[Number(b.dataset.i)];
+    closeMenu();
+    it.action();
+  });
+  ctx.addEventListener('keydown', (e) => {
+    const items = $$('.ctx-item:not([disabled])', ctx);
+    const i = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus(); }
+    else if (e.key === 'Escape') { e.preventDefault(); const o = menuOwner; closeMenu(); o?.focus(); }
+    else if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && menuOwner) {
+      e.preventDefault();
+      openMenubar(stepMenubar(menuOwner, e.key === 'ArrowRight' ? 1 : -1));
+    }
+  });
+  document.addEventListener('mousedown', (e) => {
+    if (!ctx.hidden && !ctx.contains(e.target) && !e.target.closest('.menubar-item')) closeMenu();
+  });
+  window.addEventListener('blur', closeMenu);
+  window.addEventListener('resize', closeMenu);
+  document.addEventListener('scroll', (e) => { if (!ctx.contains(e.target)) closeMenu(); }, true);
+
+  // Opens a web page or file in the normal web browser (from the app window) or a new tab.
+  const openLink = (url) => { if (url) window.open(url, '_blank', 'noopener'); };
+
+  function showItemMenu(item, x, y) {
+    if (!item) return;
+    showMenu([
+      { label: 'Edit item…', shortcut: 'Enter', action: () => openItemDialog(item) },
+      { label: 'Receive stock…', action: () => openAdjust(item, 'add') },
+      { label: 'Remove stock…', action: () => openAdjust(item, 'remove') },
+      { label: 'Set count…', action: () => openAdjust(item, 'set') },
+      'sep',
+      { label: 'Open datasheet link', disabled: !item.datasheet_url, action: () => openLink(item.datasheet_url) },
+      { label: 'Open datasheet file', disabled: !item.datasheet_file, action: () => openLink(datasheetFileUrl(item)) },
+      { label: 'Open supplier website', disabled: !item.supplier_url, action: () => openLink(item.supplier_url) },
+      'sep',
+      { label: 'Duplicate item…', action: () => openItemDialog(null, item) },
+      { label: 'Delete item…', shortcut: 'Del', danger: true, action: () => deleteItem(item) },
+      'sep',
+      { label: 'Add new item…', shortcut: 'Ctrl+N', action: () => openItemDialog() },
+    ], x, y);
+  }
+
+  function showAreaMenu(x, y) {
+    showMenu([
+      { label: 'Add item…', shortcut: 'Ctrl+N', action: () => openItemDialog() },
+      { label: 'Import from spreadsheet…', shortcut: 'Ctrl+I', action: openImport },
+      'sep',
+      { label: 'Clear search & filters', disabled: !isFiltered(), action: clearFilters },
+    ], x, y);
+  }
+
+  document.addEventListener('contextmenu', (e) => {
+    // Text boxes keep the normal cut/copy/paste menu.
+    if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+    e.preventDefault();
+    if (document.querySelector('dialog[open]') || ctx.contains(e.target)) return;
+    const tr = e.target.closest('tr[data-id]');
+    if (tr) {
+      selectRow(tr);
+      showItemMenu(rowItem(tr), e.clientX, e.clientY);
+    } else if (state.view === 'inventory' && e.target.closest('main')) {
+      showAreaMenu(e.clientX, e.clientY);
+    }
+  });
+
+  // ---- menu bar
+  const inApp = Boolean(window.chrome && window.chrome.webview);  // running in the app window
+
+  function download(url) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    document.body.append(a);
+    a.click();
+    a.remove();
+  }
+  function backupNow() {
+    download('/api/backup');
+    if (!inApp) toast('Backup file downloading — keep it somewhere safe.');
+  }
+  function showStatus(status) {
+    clearFilters();
+    state.status = status;
+    $('#fStatus').value = status;
+    setView('inventory');
+    renderInventory();
+  }
+
+  const MENUS = {
+    file: () => [
+      { label: 'New item…', shortcut: 'Ctrl+N', action: () => openItemDialog() },
+      'sep',
+      { label: 'Import from spreadsheet…', shortcut: 'Ctrl+I', action: openImport },
+      { label: 'Export to Excel…', shortcut: 'Ctrl+E', action: () => download('/api/export.xlsx') },
+      { label: 'Export to CSV…', action: () => download('/api/export.csv') },
+      'sep',
+      { label: 'Back up inventory…', shortcut: 'Ctrl+B', action: backupNow },
+      { label: 'Restore from backup…', action: openRestore },
+      'sep',
+      { label: 'Settings…', shortcut: 'Ctrl+,', action: openSettings },
+      ...(inApp ? ['sep', { label: 'Exit', shortcut: 'Alt+F4', action: () => window.chrome.webview.postMessage('exit') }] : []),
+    ],
+    edit: () => {
+      const it = selectedItem();
+      return [
+        { label: 'Add item…', shortcut: 'Ctrl+N', action: () => openItemDialog() },
+        { label: 'Edit selected item…', shortcut: 'Enter', disabled: !it, action: () => openItemDialog(it) },
+        { label: 'Adjust stock of selected item…', disabled: !it, action: () => openAdjust(it, 'add') },
+        { label: 'Duplicate selected item…', disabled: !it, action: () => openItemDialog(null, it) },
+        { label: 'Delete selected item…', shortcut: 'Del', disabled: !it, danger: true, action: () => deleteItem(it) },
+        'sep',
+        { label: 'Find…', shortcut: 'Ctrl+F', action: () => setView('inventory', { focus: true }) },
+      ];
+    },
+    view: () => [
+      { label: 'Inventory', shortcut: 'Ctrl+1', action: () => setView('inventory') },
+      { label: 'Dashboard', shortcut: 'Ctrl+2', action: () => setView('dashboard') },
+      { label: 'Activity', shortcut: 'Ctrl+3', action: () => setView('activity') },
+      'sep',
+      { label: 'Items needing reorder', action: () => showStatus('Reorder') },
+      { label: 'Items missing a datasheet', action: () => showStatus('NoDatasheet') },
+      { label: 'Clear search & filters', disabled: !isFiltered(), action: () => { clearFilters(); setView('inventory'); } },
+    ],
+    help: () => [
+      { label: 'Keyboard and mouse shortcuts', action: () => $('#shortcutsDialog').showModal() },
+      { label: 'Open data folder', action: () => openFolder('data') },
+      'sep',
+      { label: 'About Inventory Manager', action: openAbout },
+    ],
+  };
+
+  const menubarButtons = $$('.menubar-item');
+  function openMenubar(btn) {
+    const r = btn.getBoundingClientRect();
+    showMenu(MENUS[btn.dataset.menu](), r.left, r.bottom, btn);
+  }
+  function stepMenubar(btn, d) {
+    const i = menubarButtons.indexOf(btn);
+    return menubarButtons[(i + d + menubarButtons.length) % menubarButtons.length];
+  }
+  menubarButtons.forEach((b) => {
+    b.addEventListener('click', () => { if (menuOwner === b) closeMenu(); else openMenubar(b); });
+    b.addEventListener('mouseenter', () => { if (menuOwner && menuOwner !== b) openMenubar(b); });
+  });
+
+  // Underline the menu letters while Alt is held, like other Windows programs.
+  document.addEventListener('keydown', (e) => { if (e.key === 'Alt') document.body.classList.add('show-access-keys'); });
+  document.addEventListener('keyup', (e) => { if (e.key === 'Alt') document.body.classList.remove('show-access-keys'); });
+  window.addEventListener('blur', () => document.body.classList.remove('show-access-keys'));
+
+  function handleShortcut(e) {
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+      const m = { f: 'file', e: 'edit', v: 'view', h: 'help' }[e.key.toLowerCase()];
+      if (m && !document.querySelector('dialog[open]')) {
+        e.preventDefault();
+        openMenubar($(`.menubar-item[data-menu="${m}"]`));
+      }
+      return;
+    }
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || document.querySelector('dialog[open]')) return;
+    const actions = {
+      n: () => openItemDialog(), f: () => setView('inventory', { focus: true }), i: openImport,
+      e: () => download('/api/export.xlsx'), b: backupNow, ',': openSettings,
+      1: () => setView('inventory'), 2: () => setView('dashboard'), 3: () => setView('activity'),
+    };
+    const fn = actions[e.key.toLowerCase()];
+    if (fn) { e.preventDefault(); closeMenu(); fn(); }
+  }
+
+  // ------------------------------------------------------------------ settings
+  const CURRENCIES = [
+    ['USD', 'US dollar'], ['EUR', 'Euro'], ['GBP', 'British pound'], ['CAD', 'Canadian dollar'],
+    ['AUD', 'Australian dollar'], ['NZD', 'New Zealand dollar'], ['CHF', 'Swiss franc'], ['JPY', 'Japanese yen'],
+    ['CNY', 'Chinese yuan'], ['INR', 'Indian rupee'], ['MXN', 'Mexican peso'], ['BRL', 'Brazilian real'],
+    ['ZAR', 'South African rand'], ['SEK', 'Swedish krona'], ['NOK', 'Norwegian krone'], ['DKK', 'Danish krone'],
+    ['PLN', 'Polish złoty'], ['SGD', 'Singapore dollar'], ['HKD', 'Hong Kong dollar'], ['AED', 'UAE dirham'],
+  ];
+
+  function applyTheme(theme) {
+    if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+    else delete document.documentElement.dataset.theme;
+    try { localStorage.setItem('im-theme', theme || 'system'); } catch { /* not essential */ }
+  }
+
+  function applySettings(s) {
+    state.settings = s || {};
+    setCurrency(state.settings.currency);
+    applyTheme(state.settings.theme);
+  }
+
+  const settingsForm = $('#settingsForm');
+
+  async function openSettings() {
+    showError($('#settingsError'), '');
+    try {
+      const [s, info] = await Promise.all([api('GET', '/api/settings'), api('GET', '/api/info')]);
+      state.info = info;
+      applySettings(s);
+    } catch (ex) {
+      toast(ex.message, 'error');
+      return;
+    }
+    const s = state.settings;
+    const f = settingsForm.elements;
+    $('#setCurrency').innerHTML = CURRENCIES.map(([c, n]) => `<option value="${c}">${c} — ${esc(n)}</option>`).join('');
+    const cats = [...new Set([...state.defaults, ...distinct('category')])].sort(collator.compare);
+    if (s.default_category && !cats.includes(s.default_category)) cats.push(s.default_category);
+    $('#setCategory').innerHTML = '<option value="">(none)</option>' +
+      cats.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+    f.currency.value = s.currency || 'USD';
+    f.theme.value = s.theme || 'system';
+    f.default_category.value = s.default_category || '';
+    f.default_reorder_level.value = s.default_reorder_level ?? 0;
+    f.auto_backup.checked = s.auto_backup !== false;
+    f.backup_keep.value = s.backup_keep ?? 10;
+    $('#setDataPath').textContent = state.info.data_file || '';
+    $('#setBackupPath').textContent = state.info.backups_folder || '';
+    $('#settingsDialog').showModal();
+  }
+
+  // Preview the appearance while choosing it; cancelling puts the saved one back.
+  settingsForm.elements.theme.addEventListener('change', (e) => applyTheme(e.target.value));
+  $('#settingsDialog').addEventListener('close', () => applyTheme(state.settings.theme));
+
+  settingsForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = settingsForm.elements;
+    const body = {
+      currency: f.currency.value,
+      theme: f.theme.value,
+      default_category: f.default_category.value,
+      default_reorder_level: f.default_reorder_level.value === '' ? 0 : f.default_reorder_level.value,
+      auto_backup: f.auto_backup.checked,
+      backup_keep: f.backup_keep.value,
+    };
+    try {
+      applySettings(await api('PUT', '/api/settings', body));
+      $('#settingsDialog').close();
+      renderAll();
+      toast('Settings saved');
+    } catch (ex) {
+      showError($('#settingsError'), ex.message);
+    }
+  });
+
+  async function openFolder(which) {
+    try {
+      await api('POST', `/api/open-folder?which=${which}`);
+    } catch (ex) {
+      toast(ex.message, 'error');
+    }
+  }
+
+  // ------------------------------------------------------------------ restore & about
+  async function openRestore() {
+    showError($('#restoreError'), '');
+    $('#restoreFile').value = '';
+    const list = $('#backupList');
+    list.innerHTML = '<li class="muted">Loading…</li>';
+    $('#restoreDialog').showModal();
+    try {
+      const { backups } = await api('GET', '/api/backups');
+      const kindText = { auto: 'automatic', 'before-restore': 'saved before a restore', other: 'backup' };
+      list.innerHTML = backups.length ? backups.slice(0, 30).map((b) => `
+        <li>
+          <div><b>${esc(new Date(b.modified).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))}</b>
+            <span class="muted"> · ${kindText[b.kind] || 'backup'} · ${fmtSize(b.size)}</span></div>
+          <button type="button" class="btn btn-sm" data-restore="${esc(b.name)}">Restore</button>
+        </li>`).join('')
+        : '<li class="muted">No backups in the Backups folder yet.</li>';
+    } catch (ex) {
+      list.innerHTML = '';
+      showError($('#restoreError'), ex.message);
+    }
+  }
+
+  async function doRestore(label, send) {
+    const ok = await confirmBox({
+      title: 'Restore this backup?',
+      message: `Everything in Inventory Manager will be replaced with the backup from ${label}. Your current inventory is saved to the Backups folder first, so this can be undone.`,
+      ok: 'Restore backup', danger: true,
+    });
+    if (!ok) return;
+    try {
+      const r = await send();
+      $('#restoreDialog').close();
+      state.selectedId = null;
+      applySettings(await api('GET', '/api/settings'));
+      await loadItems();
+      renderAll();
+      toast(`Backup restored — ${plural(r.items, 'item')}`);
+    } catch (ex) {
+      showError($('#restoreError'), ex.message);
+    }
+  }
+
+  $('#backupList').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-restore]');
+    if (!b) return;
+    const label = b.closest('li').querySelector('b').textContent;
+    doRestore(label, () => api('POST', `/api/restore?name=${encodeURIComponent(b.dataset.restore)}`));
+  });
+  $('#restoreFile').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    doRestore(`“${file.name}”`, () => api('POST', '/api/restore', file));
+  });
+
+  async function openAbout() {
+    try { state.info = await api('GET', '/api/info'); } catch { /* show what we have */ }
+    $('#aboutVersion').textContent = `Version ${state.info.version || ''}`;
+    $('#aboutDialog').showModal();
   }
 
   document.addEventListener('click', (e) => {
@@ -891,13 +1291,10 @@
     if (action === 'clear') clearFilters();
     else if (action === 'add') openItemDialog();
     else if (action === 'import') openImport();
-    else if (action === 'show-reorder' || action === 'show-nodatasheet') {
-      clearFilters();
-      state.status = action === 'show-reorder' ? 'Reorder' : 'NoDatasheet';
-      $('#fStatus').value = state.status;
-      setView('inventory');
-      renderInventory();
-    }
+    else if (action === 'show-reorder') showStatus('Reorder');
+    else if (action === 'show-nodatasheet') showStatus('NoDatasheet');
+    else if (action === 'open-data-folder') openFolder('data');
+    else if (action === 'open-backups-folder') openFolder('backups');
     const bar = e.target.closest('.bar-row');
     if (bar) {
       clearFilters();
@@ -917,7 +1314,7 @@
   $('#actKind').addEventListener('change', (e) => { state.actKind = e.target.value; renderActivity(); });
 
   document.addEventListener('keydown', (e) => {
-    const typing = e.target.closest('input, textarea, select, [contenteditable]');
+    const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
     if (e.key === '/' && !typing && !document.querySelector('dialog[open]')) {
       e.preventDefault();
       setView('inventory', { focus: true });
@@ -926,10 +1323,16 @@
       const menu = $('#exportMenu');
       if (menu.open) menu.open = false;
     }
+    handleShortcut(e);
   });
 
   // ------------------------------------------------------------------ start
   (async () => {
+    try {
+      const [settings, info] = await Promise.all([api('GET', '/api/settings'), api('GET', '/api/info')]);
+      applySettings(settings);
+      state.info = info;
+    } catch { /* defaults are fine */ }
     try {
       await loadItems();
     } catch (ex) {

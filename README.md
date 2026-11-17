@@ -4,7 +4,7 @@ A searchable inventory app for Windows, built from `inventory_management.xlsx`. 
 
 ## Install
 
-1. Download **`InventoryManager-Setup-2.1.0.exe`** from this repository's **Releases** page (or build it yourself; see below).
+1. Download **`InventoryManager-Setup-2.2.0.exe`** from this repository's **Releases** page (or build it yourself; see below).
 2. Double-click it and follow the steps. No administrator rights are needed: it installs for your Windows account. To install it for everyone on the PC, choose that option in the first screen of the setup wizard.
 3. Start **Inventory Manager** from the Start menu or the desktop shortcut.
 
@@ -16,24 +16,46 @@ The first time it runs, it imports the items from the bundled `inventory_managem
 
 ## What it does
 
-- **Search**: results update as you type and match SKU, item name, category, location, supplier and notes. Several words narrow the results (`aisle 3 hub`). Press <kbd>/</kbd> to jump to the search box.
-- **Filter and sort**: filter by category, location or status (Needs reorder / Out of stock / OK), and click any column heading to sort.
-- **Add, edit and delete items**: click a row to edit it. *Total value* (Quantity × Unit Cost) and *Status* ("Reorder" when Quantity ≤ Reorder Level) are calculated the same way as in the spreadsheet.
-- **Manufacturer and datasheet**: each item can have a manufacturer, the manufacturer's website, a datasheet link, and an attached datasheet file (PDF or similar, up to 25 MB, stored inside the app's data file).
-  - The app remembers each manufacturer's website: type a known manufacturer and the website fills in automatically.
-  - Small icons next to the item name open the datasheet, the attached file, or the manufacturer's website in your web browser.
+- **Search**: results update as you type and match SKU, item name, category, location, supplier and notes. Several words narrow the results (`aisle 3 hub`). Press <kbd>Ctrl</kbd>+<kbd>F</kbd> or <kbd>/</kbd> to jump to the search box.
+- **Filter and sort**: filter by category, location or status (Needs reorder / Out of stock / OK / Missing datasheet), and click any column heading to sort.
+- **Working with items**:
+  - **Click** an item to select it. **Double-click** it, or press <kbd>Enter</kbd>, to open its edit window. <kbd>↑</kbd>/<kbd>↓</kbd> move between items, and <kbd>Delete</kbd> deletes the selected one (after asking).
+  - **Right-click an item** for its menu: edit, receive / remove / set count, open its datasheet or supplier website, duplicate, delete, or add a new item.
+  - **Right-click anywhere else** in the Inventory view for *Add item*, *Import* and *Clear search & filters*.
+  - *Total value* (Quantity × Unit Cost) and *Status* ("Reorder" when Quantity ≤ Reorder Level) are calculated the same way as in the spreadsheet.
+- **Menu bar**: *File* (new item, import, export, back up, restore, settings, exit), *Edit*, *View* and *Help*. Hold <kbd>Alt</kbd> and press the underlined letter to open a menu. **Help → Keyboard and mouse shortcuts** lists all the shortcuts.
+- **Supplier website and datasheet**: each item can have its supplier's website, a datasheet link, and an attached datasheet file (PDF or similar, up to 25 MB, stored inside the app's data file).
+  - The app remembers each supplier's website: pick a supplier you've used before and the website fills in automatically.
+  - Small icons next to the item name open the datasheet, the attached file, or the supplier's website in your web browser.
   - You can type `www.example.com`; it becomes `https://www.example.com`. Anything that isn't a web address is refused.
-  - **Missing datasheet:** pick it in the status filter, or click the Dashboard card, to list items without a datasheet link or file.
-- **Adjust stock**: the **Adjust** button lets you *Receive* (+), *Remove* (−) or *Set count* (stocktake), with an optional note such as a PO number.
-- **Dashboard**: totals, items needing reorder grouped by supplier, and stock value by category.
+- **Adjust stock**: the **Adjust** button (or the right-click menu) lets you *Receive* (+), *Remove* (−) or *Set count* (stocktake), with an optional note such as a PO number.
+- **Dashboard**: totals, items needing reorder grouped by supplier, items missing a datasheet, and stock value by category.
 - **Activity**: a searchable log of every stock change.
 - **Import**: load an `.xlsx` or `.csv` file. Columns are matched by heading, and you see a preview of what will change before anything is saved. *Merge* updates matching SKUs and adds new ones; *Replace* swaps out the whole inventory.
-  - Link columns can be named *Manufacturer* (or *Brand*), *Manufacturer Website* (or *Website*) and *Datasheet URL* (or *Datasheet*, *Spec Sheet*), so you can fill in links for many items at once in Excel.
-- **Export**: download an Excel workbook (Inventory and Activity sheets, with live formulas and clickable links) or a CSV file. Files go to your Downloads folder.
+  - Link columns can be named *Supplier Website* (or *Website*) and *Datasheet URL* (or *Datasheet*, *Spec Sheet*), so you can fill in links for many items at once in Excel.
+- **Export**: save an Excel workbook (Inventory and Activity sheets, with live formulas and clickable links) or a CSV file. Windows asks where to save it.
+
+## Settings
+
+**File → Settings** (<kbd>Ctrl</kbd>+<kbd>,</kbd>):
+
+- **Currency**: used on screen and in Excel exports.
+- **Appearance**: same as Windows, Light or Dark.
+- **New items**: a default category and reorder level for new items.
+- **Backups**: turn the daily automatic backup on or off, and choose how many to keep.
+- **Data locations**: where your data and backups are, with buttons to open those folders.
+
+## Backup and restore
+
+- **Automatic**: once a day, when the app opens, it saves a copy of your whole inventory in the *Backups* folder. It keeps the last 10 by default.
+- **Back up now**: **File → Back up inventory** (<kbd>Ctrl</kbd>+<kbd>B</kbd>) saves a backup file wherever you choose, such as a USB stick or a cloud folder.
+- **Restore**: **File → Restore from backup** lists the automatic backups, or lets you pick a backup file you saved. Restoring replaces everything: items, history, attached files and settings. Your current inventory is saved to the Backups folder first, so a restore can always be undone.
 
 ## Your data
 
-Your inventory is stored in **`%LOCALAPPDATA%\Inventory Manager\inventory.db`**; paste that into File Explorer's address bar to open the folder. To back it up, copy that file, or use **Export → Excel workbook**. To start over from the spreadsheet, close the app, delete `inventory.db`, and open the app again.
+Your inventory is stored in **`%LOCALAPPDATA%\Inventory Manager\inventory.db`**, and backups in the *Backups* folder next to it. **Help → Open data folder** opens that folder. To start over from the spreadsheet, close the app, delete `inventory.db`, and open the app again.
+
+Upgrading from 2.1.0: the old *Manufacturer* and *Manufacturer website* values aren't shown any more, but they're kept in the data file, not deleted.
 
 Advanced options, added to the shortcut's *Target* after the closing quote:
 

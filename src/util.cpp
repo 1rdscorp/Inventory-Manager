@@ -7,7 +7,7 @@
 
 const std::vector<std::string> kFields = {"sku",      "name",          "category",  "location",   "supplier",
                                           "quantity", "reorder_level", "unit_cost", "unit_price", "notes",
-                                          "manufacturer", "manufacturer_url", "datasheet_url"};
+                                          "supplier_url", "datasheet_url"};
 const std::vector<std::string> kDefaultCategories = {"Electronics", "Office Supplies", "Furniture",
                                                      "Tools",       "Packaging",       "Other"};
 
@@ -15,15 +15,14 @@ namespace {
 
 const std::vector<std::pair<std::string, size_t>> kTextLimits = {
     {"sku", 64}, {"name", 200}, {"category", 80}, {"location", 80}, {"supplier", 120}, {"notes", 2000},
-    {"manufacturer", 120}, {"manufacturer_url", 500}, {"datasheet_url", 500}};
+    {"supplier_url", 500}, {"datasheet_url", 500}};
 
 std::string label_for(const std::string& key) {
     static const std::map<std::string, std::string> labels = {
         {"sku", "SKU"},           {"name", "Item name"},          {"category", "Category"},
         {"location", "Location"}, {"supplier", "Supplier"},       {"notes", "Notes"},
         {"quantity", "Quantity"}, {"reorder_level", "Reorder level"}, {"unit_cost", "Unit cost"},
-        {"unit_price", "Unit price"}, {"manufacturer", "Manufacturer"}, {"manufacturer_url", "Manufacturer website"},
-        {"datasheet_url", "Datasheet link"}};
+        {"unit_price", "Unit price"}, {"supplier_url", "Supplier website"}, {"datasheet_url", "Datasheet link"}};
     auto it = labels.find(key);
     return it == labels.end() ? key : it->second;
 }
@@ -227,8 +226,7 @@ Item validate_item(const Record& data) {
     it.location = clean_text(get(data, "location"), "location");
     it.supplier = clean_text(get(data, "supplier"), "supplier");
     it.notes = clean_text(get(data, "notes"), "notes");
-    it.manufacturer = clean_text(get(data, "manufacturer"), "manufacturer");
-    it.manufacturer_url = clean_url(get(data, "manufacturer_url"), "manufacturer_url");
+    it.supplier_url = clean_url(get(data, "supplier_url"), "supplier_url");
     it.datasheet_url = clean_url(get(data, "datasheet_url"), "datasheet_url");
     it.quantity = parse_number(get(data, "quantity"), "Quantity");
     it.reorder_level = parse_number(get(data, "reorder_level"), "Reorder level");
@@ -246,8 +244,7 @@ Record item_to_record(const Item& it) {
             {"location", Value::str(it.location)},
             {"supplier", Value::str(it.supplier)},
             {"notes", Value::str(it.notes)},
-            {"manufacturer", Value::str(it.manufacturer)},
-            {"manufacturer_url", Value::str(it.manufacturer_url)},
+            {"supplier_url", Value::str(it.supplier_url)},
             {"datasheet_url", Value::str(it.datasheet_url)},
             {"quantity", Value::number(it.quantity)},
             {"reorder_level", Value::number(it.reorder_level)},

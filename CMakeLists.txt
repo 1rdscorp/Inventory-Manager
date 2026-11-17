@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(InventoryManager VERSION 2.1.0 LANGUAGES C CXX)
+project(InventoryManager VERSION 2.2.0 LANGUAGES C CXX)
 
 if(NOT MSVC)
   message(FATAL_ERROR "Build with the Microsoft C++ compiler (run build.bat, or use a Visual Studio developer prompt).")
@@ -72,7 +72,8 @@ add_executable(InventoryManager WIN32
   "${CMAKE_BINARY_DIR}/resources.rc")
 target_include_directories(InventoryManager PRIVATE src "${WEBVIEW2_DIR}/include")
 target_compile_definitions(InventoryManager PRIVATE
-  UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 CPPHTTPLIB_THREAD_POOL_COUNT=4)
+  UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 CPPHTTPLIB_THREAD_POOL_COUNT=4
+  APP_VERSION="${PROJECT_VERSION}")
 target_compile_options(InventoryManager PRIVATE /W4 /utf-8 /permissive- /wd4100)
 target_link_libraries(InventoryManager PRIVATE thirdparty
   "${WEBVIEW2_DIR}/x64/WebView2LoaderStatic.lib" ws2_32 version shlwapi)
