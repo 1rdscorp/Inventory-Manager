@@ -79,6 +79,7 @@
     }
     let data = null;
     try { data = await res.json(); } catch { /* not JSON */ }
+    if (res.status === 423 && typeof refreshLocation === 'function') setTimeout(refreshLocation, 0);
     if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
     return data;
   }
@@ -1187,6 +1188,7 @@
     f.default_reorder_level.value = s.default_reorder_level ?? 0;
     f.auto_backup.checked = s.auto_backup !== false;
     f.backup_keep.value = s.backup_keep ?? 10;
+    refreshLocation();
     $('#setDataPath').textContent = state.info.data_file || '';
     $('#setBackupPath').textContent = state.info.backups_folder || '';
     $('#settingsDialog').showModal();
@@ -1295,6 +1297,9 @@
     else if (action === 'show-nodatasheet') showStatus('NoDatasheet');
     else if (action === 'open-data-folder') openFolder('data');
     else if (action === 'open-backups-folder') openFolder('backups');
+    else if (action === 'loc-choose') openLocationDialog();
+    else if (action === 'loc-local') { showError($('#localError'), ''); $('#localDialog').showModal(); }
+    else if (action === 'sync-now') syncNow();
     const bar = e.target.closest('.bar-row');
     if (bar) {
       clearFilters();
@@ -1326,6 +1331,223 @@
     handleShortcut(e);
   });
 
+  // ------------------------------------------------------------------ data location (shared folder)
+  state.location = { mode: 'local' };
+  let locationTimer = null;
+
+  const ago = (iso) => {
+    if (!iso) return '';
+    const mins = Math.round((Date.now() - new Date(iso)) / 60000);
+    if (isNaN(mins)) return '';
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins} min ago`;
+    return fmtWhen(iso);
+  };
+
+  async function refreshLocation() {
+    try {
+      state.location = await api('GET', '/api/data-location');
+    } catch {
+      return;
+    }
+    renderLocation();
+    // Shared folder: keep the status fresh (saving happens in the background).
+    const shared = state.location.mode === 'shared' || state.location.fallback;
+    if (shared && !locationTimer) locationTimer = setInterval(refreshLocation, 15000);
+    if (!shared && locationTimer) { clearInterval(locationTimer); locationTimer = null; }
+  }
+
+  function renderLocation() {
+    const loc = state.location;
+    const chip = $('#syncChip');
+    const banner = $('#syncBanner');
+    const msgs = [];
+    if (loc.mode === 'shared') {
+      chip.hidden = false;
+      let text = 'Shared';
+      let kind = 'ok';
+      if (loc.read_only) { text = 'View only'; kind = 'warn'; }
+      else if (loc.conflict) { text = 'Not saving'; kind = 'bad'; }
+      else if (loc.problem) { text = 'Waiting to save'; kind = 'warn'; }
+      else if (loc.pending) { text = 'Saving…'; }
+      else if (loc.last_saved) { text = `Saved ${ago(loc.last_saved)}`; }
+      chip.textContent = text;
+      chip.className = `sync-chip sync-${kind}`;
+      if (loc.read_only_reason) msgs.push(['warn', loc.read_only_reason]);
+      else if (loc.problem) msgs.push(['warn', loc.problem]);
+    } else {
+      chip.hidden = true;
+    }
+    if (loc.fallback) msgs.push(['warn', `The shared folder (${loc.folder}) wasn't available when Inventory Manager opened, so this computer's own data is being used. Changes made now stay on this computer. Restart Inventory Manager once the folder is back.`]);
+    if (loc.notes) msgs.push(['info', loc.notes]);
+    banner.hidden = msgs.length === 0;
+    banner.className = `banner banner-${msgs[0]?.[0] || 'info'}`;
+    banner.innerHTML = msgs.map(([, m]) => `<p>${esc(m)}</p>`).join('');
+    renderLocationSettings();
+  }
+
+  function renderLocationSettings() {
+    const loc = state.location;
+    const sum = $('#locSummary');
+    if (!sum) return;
+    if (loc.mode === 'shared') {
+      sum.innerHTML = `<p><b>Shared folder</b> — this computer (${esc(loc.computer)}) uses the inventory in:</p>
+        <p class="mono path">${esc(loc.folder)}</p>
+        <p class="muted small">${loc.read_only ? 'Opened view only.' : loc.last_saved ? `Last saved to the folder ${esc(ago(loc.last_saved))}.` : 'Changes are saved to the folder a few seconds after you make them.'}</p>`;
+    } else {
+      sum.innerHTML = `<p><b>This computer only</b> — the inventory is stored on this computer.</p>
+        <p class="muted small">To use the same inventory on several computers, put it in a folder that syncs between them, such as Google Drive.</p>`;
+    }
+    $('#locChooseBtn').textContent = loc.mode === 'shared' ? 'Use a different shared folder…' : 'Use a shared folder…';
+    $('#locLocalBtn').hidden = loc.mode !== 'shared' && !loc.fallback;
+    $('#syncNowBtn').hidden = loc.mode !== 'shared' || loc.read_only;
+    for (const id of ['#locChooseBtn', '#locLocalBtn']) $(id).disabled = Boolean(loc.fixed);
+  }
+
+  // ---- choosing a shared folder
+  const locForm = $('#locationForm');
+  let locCheckSeq = 0;
+  let locInfo = null;
+
+  function openLocationDialog() {
+    locForm.reset();
+    locInfo = null;
+    $('#locCheck').hidden = true;
+    $('#locChoice').hidden = true;
+    $('#locSubmit').disabled = true;
+    $('#locBrowse').hidden = !inApp;
+    showError($('#locError'), '');
+    $('#locationDialog').showModal();
+    if (inApp) $('#locBrowse').focus(); else $('#locPath').focus();
+  }
+
+  async function checkFolder() {
+    const path = $('#locPath').value.trim();
+    const seq = ++locCheckSeq;
+    locInfo = null;
+    $('#locSubmit').disabled = true;
+    $('#locChoice').hidden = true;
+    showError($('#locError'), '');
+    const box = $('#locCheck');
+    if (!path) { box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML = '<span class="muted">Checking the folder…</span>';
+    try {
+      const info = await api('GET', `/api/data-location/check?path=${encodeURIComponent(path)}`);
+      if (seq !== locCheckSeq) return;
+      locInfo = info;
+      const lines = [];
+      let ok = true;
+      if (!info.exists) { lines.push(['bad', 'This folder doesn’t exist.']); ok = false; }
+      else if (!info.writable) { lines.push(['bad', 'Inventory Manager can’t save files in this folder.']); ok = false; }
+      else if (info.is_current) { lines.push(['ok', 'This computer already uses this folder.']); ok = false; }
+      else {
+        if (info.provider) lines.push(['ok', `${info.provider} folder — it will sync between your computers.`]);
+        else lines.push(['warn', 'This doesn’t look like a Google Drive, OneDrive or Dropbox folder. That’s fine if it syncs between your computers (or is a shared network folder).']);
+        if (info.unreadable) lines.push(['warn', 'There’s an inventory file here, but it can’t be read yet — it may still be syncing.']);
+        if (info.has_inventory) {
+          const by = info.saved_by ? ` by ${info.saved_by}` : '';
+          const when = info.saved_at ? ` on ${fmtWhen(info.saved_at)}` : '';
+          lines.push(['ok', `Contains an inventory with ${plural(info.items, 'item')}, last saved${by}${when}.`]);
+        } else if (!info.unreadable) {
+          lines.push(['ok', `Empty — this computer’s inventory (${plural(state.items.length, 'item')}) will be copied here.`]);
+        }
+        const lk = info.lock || {};
+        if (lk.exists && !lk.this_computer && !lk.stale) {
+          lines.push(['bad', `The inventory here is open on ${lk.computer} right now. Close Inventory Manager there first.`]);
+          ok = false;
+        }
+      }
+      box.innerHTML = lines.map(([k, t]) => `<p class="lc-${k}">${esc(t)}</p>`).join('');
+      if (ok && (info.has_inventory || info.unreadable)) {
+        $('#locUseFolder').innerHTML = `<b>Use the inventory in this folder</b>${info.has_inventory ? ` (${plural(info.items, 'item')})` : ''} — this computer’s current inventory stays on this computer, so you can switch back`;
+        $('#locUseThis').innerHTML = `<b>Replace it with this computer’s inventory</b> (${plural(state.items.length, 'item')}) — the folder’s current inventory is backed up first`;
+        locForm.elements.locUse.value = info.has_inventory ? 'folder' : 'this';
+        $('#locChoice').hidden = false;
+      }
+      $('#locSubmit').disabled = !ok;
+    } catch (ex) {
+      if (seq !== locCheckSeq) return;
+      box.hidden = true;
+      showError($('#locError'), ex.message);
+    }
+  }
+
+  let locTypingTimer = null;
+  $('#locPath').addEventListener('input', () => {
+    clearTimeout(locTypingTimer);
+    locTypingTimer = setTimeout(checkFolder, 500);
+  });
+  $('#locBrowse').addEventListener('click', () => window.chrome.webview.postMessage('pick-folder'));
+  if (inApp) {
+    window.chrome.webview.addEventListener('message', (e) => {
+      const m = e.data;
+      if (m && m.type === 'folder' && m.path) {
+        $('#locPath').value = m.path;
+        checkFolder();
+      }
+    });
+  }
+
+  function restartApp() {
+    if (inApp) {
+      toast('Restarting Inventory Manager…');
+      setTimeout(() => window.chrome.webview.postMessage('restart'), 600);
+    } else {
+      confirmBox({ title: 'Restart needed', message: 'Close Inventory Manager and open it again to finish switching.', ok: 'OK' });
+    }
+  }
+
+  locForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!locInfo) return;
+    const use = (locInfo.has_inventory || locInfo.unreadable) ? locForm.elements.locUse.value : 'this';
+    if (use === 'this' && locInfo.has_inventory) {
+      const ok = await confirmBox({
+        title: 'Replace the shared inventory?',
+        message: `The inventory in this folder (${plural(locInfo.items, 'item')}) will be replaced with this computer’s inventory (${plural(state.items.length, 'item')}). A copy of the folder’s inventory is saved in this computer’s Backups folder first.`,
+        ok: 'Replace and restart', danger: true,
+      });
+      if (!ok) return;
+    }
+    $('#locSubmit').disabled = true;
+    try {
+      await api('POST', '/api/data-location', { mode: 'shared', path: locInfo.path, use });
+      $('#locationDialog').close();
+      $('#settingsDialog').close();
+      restartApp();
+    } catch (ex) {
+      showError($('#locError'), ex.message);
+      $('#locSubmit').disabled = false;
+    }
+  });
+
+  // ---- back to this computer only
+  $('#localForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('POST', '/api/data-location', { mode: 'local', use: $('#localForm').elements.localUse.value });
+      $('#localDialog').close();
+      $('#settingsDialog').close();
+      restartApp();
+    } catch (ex) {
+      showError($('#localError'), ex.message);
+    }
+  });
+
+  async function syncNow() {
+    try {
+      const s = await api('POST', '/api/sync');
+      state.location = { ...state.location, ...s };
+      renderLocation();
+      toast(s.ok ? 'Saved to the shared folder' : (s.conflict || s.problem || 'Couldn’t save to the shared folder'), s.ok ? 'ok' : 'error');
+    } catch (ex) {
+      toast(ex.message, 'error');
+    }
+  }
+
+  $('#syncChip').addEventListener('click', openSettings);
+
   // ------------------------------------------------------------------ start
   (async () => {
     try {
@@ -1341,5 +1563,6 @@
     renderMeta();
     renderInventory();
     setView(location.hash.slice(1) || 'inventory');
+    refreshLocation();
   })();
 })();

@@ -4,7 +4,7 @@ A searchable inventory app for Windows, built from `inventory_management.xlsx`. 
 
 ## Install
 
-1. Download **`InventoryManager-Setup-2.2.0.exe`** from this repository's **Releases** page (or build it yourself; see below).
+1. Download **`InventoryManager-Setup-2.3.0.exe`** from this repository's **Releases** page (or build it yourself; see below).
 2. Double-click it and follow the steps. No administrator rights are needed: it installs for your Windows account. To install it for everyone on the PC, choose that option in the first screen of the setup wizard.
 3. Start **Inventory Manager** from the Start menu or the desktop shortcut.
 
@@ -51,9 +51,29 @@ The first time it runs, it imports the items from the bundled `inventory_managem
 - **Back up now**: **File → Back up inventory** (<kbd>Ctrl</kbd>+<kbd>B</kbd>) saves a backup file wherever you choose, such as a USB stick or a cloud folder.
 - **Restore**: **File → Restore from backup** lists the automatic backups, or lets you pick a backup file you saved. Restoring replaces everything: items, history, attached files and settings. Your current inventory is saved to the Backups folder first, so a restore can always be undone.
 
+## Using one inventory on several computers (Google Drive)
+
+You can keep the inventory in a folder that syncs between your computers, such as Google Drive, OneDrive or Dropbox.
+
+**Set it up:**
+
+1. Install Google Drive for desktop on each computer and sign in to the same account. Create a folder in it, for example `My Drive\Inventory Manager`.
+2. On the computer that has your current inventory, go to **File → Settings → Data location → Use a shared folder…**, choose that folder, and click **Use this folder**. Your inventory is copied there and Inventory Manager restarts.
+3. On each other computer, do the same and choose the same folder. Pick **Use the inventory in this folder**.
+
+**How it works:**
+
+- **Working copy:** each computer works on its own copy and saves it to the shared folder a few seconds after each change, and when Inventory Manager closes. The status chip at the top (*Saving…*, *Saved 2 min ago*) shows where it's at, and Google Drive then syncs the file to your other computers.
+- **One computer at a time:** only one computer can make changes at a time. If the inventory is open on another computer, you can open it **view only**. If that computer crashed or was turned off without closing Inventory Manager, you're offered to take over after 10 minutes, or straight away with **Open anyway**.
+- **Nothing is overwritten silently:** if changes from two computers ever collide, nothing is overwritten. The changes that couldn't be saved are kept in the *Backups* folder (as `unsaved-changes-….db`, restorable from **File → Restore from backup**), and a message explains what happened.
+- **Switching computers:** close Inventory Manager on one computer and give Google Drive a moment to finish syncing before opening it on another.
+- **Going back:** **Settings → Data location → Keep data on this computer only…** switches back. It can keep the shared inventory, or go back to this computer's earlier data.
+
+Backups and settings like the window position stay on each computer.
+
 ## Your data
 
-Your inventory is stored in **`%LOCALAPPDATA%\Inventory Manager\inventory.db`**, and backups in the *Backups* folder next to it. **Help → Open data folder** opens that folder. To start over from the spreadsheet, close the app, delete `inventory.db`, and open the app again.
+Your inventory is stored in **`%LOCALAPPDATA%\Inventory Manager\inventory.db`** (or in the shared folder you chose, with a working copy in `%LOCALAPPDATA%\Inventory Manager\shared`), and backups in the *Backups* folder in `%LOCALAPPDATA%\Inventory Manager`. **Help → Open data folder** opens that folder. To start over from the spreadsheet, close the app, delete `inventory.db`, and open the app again.
 
 Upgrading from 2.1.0: the old *Manufacturer* and *Manufacturer website* values aren't shown any more, but they're kept in the data file, not deleted.
 
@@ -94,6 +114,7 @@ Third-party libraries are downloaded by CMake and checked against fixed SHA-256 
 | --- | --- |
 | `src/main.cpp` | Windows app: window, WebView2, single instance, command-line options |
 | `src/server.cpp` | Local HTTP API used by the app's pages |
+| `src/shared.cpp` | Shared-folder mode: lock note, saving to and loading from the shared folder, conflict detection |
 | `src/store.cpp` | SQLite storage, stock adjustments, import logic |
 | `src/spreadsheet.cpp` | Reading and writing .xlsx and .csv files |
 | `src/util.cpp` | Shared helpers: validation, numbers, text |

@@ -9,8 +9,12 @@
 //   --host <addr>    listen address; 0.0.0.0 lets other computers on your network connect
 //   --browser        open in your web browser instead of the app window
 //   --headless       run the server only (no window); used for automated testing
+//   --shared <dir>   use this shared folder (instead of the one chosen in Settings)
+//   --cache <dir>    keep the shared-folder working copy here (testing several "computers" on one PC)
+//   --data-dir <dir> keep this computer's data and backups here instead of %LOCALAPPDATA%\Inventory Manager
 
 #include <windows.h>
+#include <commctrl.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
@@ -19,14 +23,18 @@
 #include <WebView2.h>
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <cwctype>
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include "resource.h"
 #include "server.h"
+#include "shared.h"
 #include "store.h"
 
 using Microsoft::WRL::Callback;
@@ -41,8 +49,9 @@ const UINT WM_APP_RUN = WM_APP + 1;  // runs a queued function on the window thr
 const wchar_t* kRegKey = L"Software\\Inventory Manager";
 
 struct Options {
-    std::wstring db, host = L"127.0.0.1";
+    std::wstring db, host = L"127.0.0.1", shared, cache, data_dir;
     int port = 0;
+    DWORD wait_for_pid = 0;  // after "restart": wait for the previous copy to finish closing
     bool browser = false, headless = false;
 };
 
@@ -112,6 +121,10 @@ Options parse_args() {
         else if (a == L"--host") o.host = next();
         else if (a == L"--browser") o.browser = true;
         else if (a == L"--headless") o.headless = true;
+        else if (a == L"--shared") o.shared = next();
+        else if (a == L"--cache") o.cache = next();
+        else if (a == L"--data-dir") o.data_dir = next();
+        else if (a == L"--wait-for-pid") o.wait_for_pid = static_cast<DWORD>(_wtoi(next().c_str()));
     }
     LocalFree(argv);
     return o;
@@ -151,6 +164,63 @@ bool ask_save_path(const std::wstring& suggested, std::wstring& chosen) {
     chosen = path;
     CoTaskMemFree(path);
     return true;
+}
+
+// A Windows task dialog with large option buttons. Returns the chosen button id (IDCANCEL if closed).
+int ask(const std::wstring& heading, const std::wstring& text, const std::vector<std::pair<int, std::wstring>>& buttons,
+        int default_id, PCWSTR icon = TD_WARNING_ICON) {
+    std::vector<TASKDIALOG_BUTTON> b;
+    for (const auto& [id, label] : buttons) b.push_back({id, label.c_str()});
+    TASKDIALOGCONFIG c{sizeof c};
+    c.hwndParent = g_app.hwnd;
+    c.dwFlags = TDF_USE_COMMAND_LINKS | TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW;
+    c.pszWindowTitle = kTitle;
+    c.pszMainIcon = icon;
+    c.pszMainInstruction = heading.c_str();
+    c.pszContent = text.c_str();
+    c.cButtons = static_cast<UINT>(b.size());
+    c.pButtons = b.data();
+    c.nDefaultButton = default_id;
+    int pressed = IDCANCEL;
+    if (FAILED(TaskDialogIndirect(&c, &pressed, nullptr, nullptr))) return IDCANCEL;
+    return pressed;
+}
+
+// Standard Windows folder picker. Returns false if cancelled.
+bool pick_folder(std::wstring& chosen) {
+    ComPtr<IFileOpenDialog> dlg;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return false;
+    FILEOPENDIALOGOPTIONS opts = 0;
+    dlg->GetOptions(&opts);
+    dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    dlg->SetTitle(L"Choose the shared folder for your inventory");
+    dlg->SetOkButtonLabel(L"Use this folder");
+    if (FAILED(dlg->Show(g_app.hwnd))) return false;
+    ComPtr<IShellItem> item;
+    PWSTR path = nullptr;
+    if (FAILED(dlg->GetResult(&item)) || FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) return false;
+    chosen = path;
+    CoTaskMemFree(path);
+    return true;
+}
+
+// Starts a fresh copy of the app (which waits for this one to close), then closes this one.
+void restart_app() {
+    wchar_t exe[MAX_PATH * 4];
+    GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(std::size(exe)));
+    // Same options as this copy was started with (a later --wait-for-pid overrides any earlier one).
+    std::wstring cmd = std::wstring(GetCommandLineW()) + L" --wait-for-pid " + std::to_wstring(GetCurrentProcessId());
+    STARTUPINFOW si{sizeof si};
+    PROCESS_INFORMATION pi{};
+    if (CreateProcessW(exe, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    PostMessageW(g_app.hwnd, WM_CLOSE, 0, 0);
+}
+
+void post_to_page(const json& message) {
+    if (g_app.webview) g_app.webview->PostWebMessageAsJson(widen(message.dump()).c_str());
 }
 
 void open_in_browser() { ShellExecuteW(nullptr, L"open", g_app.url.c_str(), nullptr, nullptr, SW_SHOWNORMAL); }
@@ -248,10 +318,17 @@ void create_webview() {
                             g_app.webview->add_WebMessageReceived(
                                 Callback<ICoreWebView2WebMessageReceivedEventHandler>(
                                     [](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
-                                        LPWSTR msg = nullptr;
-                                        if (SUCCEEDED(args->TryGetWebMessageAsString(&msg)) && msg && std::wstring(msg) == L"exit")
-                                            PostMessageW(g_app.hwnd, WM_CLOSE, 0, 0);
-                                        CoTaskMemFree(msg);
+                                        LPWSTR raw = nullptr;
+                                        std::wstring msg;
+                                        if (SUCCEEDED(args->TryGetWebMessageAsString(&raw)) && raw) msg = raw;
+                                        CoTaskMemFree(raw);
+                                        if (msg == L"exit") PostMessageW(g_app.hwnd, WM_CLOSE, 0, 0);
+                                        else if (msg == L"restart") run_async(restart_app);
+                                        else if (msg == L"pick-folder")
+                                            run_async([] {
+                                                std::wstring folder;
+                                                post_to_page({{"type", "folder"}, {"path", pick_folder(folder) ? narrow(folder) : ""}});
+                                            });
                                         return S_OK;
                                     })
                                     .Get(),
@@ -406,6 +483,12 @@ HWND create_main_window(HINSTANCE inst) {
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     Options opt = parse_args();
+    if (opt.wait_for_pid) {
+        if (HANDLE old = OpenProcess(SYNCHRONIZE, FALSE, opt.wait_for_pid)) {
+            WaitForSingleObject(old, 30000);
+            CloseHandle(old);
+        }
+    }
 
     // One copy at a time: a second launch just brings the existing window forward.
     HANDLE mutex = nullptr;
@@ -422,7 +505,72 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-    std::filesystem::path db_path = opt.db.empty() ? data_dir() / L"inventory.db" : std::filesystem::path(opt.db);
+    const std::filesystem::path local_dir = opt.data_dir.empty() ? data_dir() : std::filesystem::path(opt.data_dir);
+    const std::filesystem::path backups_dir = local_dir / L"Backups";
+    const std::filesystem::path cache_dir = opt.cache.empty() ? local_dir / L"shared" : std::filesystem::path(opt.cache);
+    const std::string computer = computer_name();
+
+    // Where is the inventory? This computer's own folder, or a shared folder (Settings > Data location).
+    std::unique_ptr<SharedSync> sync;
+    std::string startup_note;
+    std::filesystem::path db_path;
+    DataLocation loc = DataLocation::load();
+    if (!opt.shared.empty()) loc = {true, std::filesystem::path(opt.shared)};
+    if (!opt.db.empty()) {
+        db_path = opt.db;
+    } else if (loc.shared) {
+        sync = std::make_unique<SharedSync>(loc.folder, cache_dir, computer);
+        for (;;) {
+            try {
+                bool view_only = false;
+                LockInfo l = sync->read_lock();
+                if (l.exists && !l.this_computer) {
+                    std::wstring who = widen(l.computer) + (l.user.empty() ? L"" : L" (" + widen(l.user) + L")");
+                    int choice;
+                    if (opt.headless) {
+                        choice = l.stale ? 1 : 2;
+                    } else if (l.stale) {
+                        choice = ask(L"The shared inventory was last open on " + who,
+                                     L"That computer hasn't been heard from for " + std::to_wstring(l.minutes_since_seen) +
+                                         L" minutes - it may have been turned off without closing Inventory Manager, or lost "
+                                         L"its internet connection.",
+                                     {{1, L"Open it here\nUse this computer to make changes"},
+                                      {2, L"View only\nLook without making changes"},
+                                      {3, L"Exit"}},
+                                     1, TD_INFORMATION_ICON);
+                    } else {
+                        choice = ask(L"The shared inventory is open on " + who,
+                                     L"Only one computer can make changes at a time, so changes made on two computers "
+                                     L"at once don't overwrite each other.",
+                                     {{2, L"View only\nLook without making changes (recommended)"},
+                                      {1, L"Open anyway\nOnly if Inventory Manager isn't really open there - any unsaved "
+                                          L"changes on that computer could be lost"},
+                                      {3, L"Exit"}},
+                                     2);
+                    }
+                    if (choice != 1 && choice != 2) return 0;
+                    view_only = choice == 2;
+                    if (view_only) sync->set_view_only(narrow(who));
+                }
+                startup_note = sync->prepare(view_only, backups_dir);
+                if (!view_only) sync->take_lock();
+                db_path = sync->working_db();
+                break;
+            } catch (const ApiError& e) {
+                if (opt.headless) return 1;
+                int choice = ask(L"Can't open the shared inventory", widen(e.what()),
+                                 {{1, L"Try again"},
+                                  {2, L"Use this computer's own data for now\nThe shared folder stays selected in Settings"},
+                                  {3, L"Exit"}},
+                                 1);
+                if (choice == 1) continue;
+                if (choice != 2) return 0;
+                sync.reset();
+                break;
+            }
+        }
+    }
+    if (db_path.empty()) db_path = local_dir / L"inventory.db";
     std::unique_ptr<Store> store;
     try {
         std::error_code ec;
@@ -432,20 +580,145 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
         error_box(L"Couldn't open the data file\n" + db_path.wstring() + L"\n\n" + widen(e.what()));
         return 1;
     }
+    if (sync) store->set_backups_dir(narrow(backups_dir.wstring()));
+    const bool view_only = sync && sync->read_only();
     try {
         // First run: bring in the spreadsheet that's installed next to the app.
         store->seed_from_file(narrow((exe_dir() / L"inventory_management.xlsx").wstring()));
     } catch (const std::exception&) {
         // Not fatal - the inventory just starts empty and can be imported later.
     }
-    if (!opt.headless) {
+    if (!opt.headless && !view_only) {
         try {
             store->auto_backup_if_due();  // daily copy in the Backups folder (Settings can turn this off)
         } catch (const std::exception&) {
         }
     }
 
+    // Shared folder: save any changes not yet in the shared folder, then keep saving in the background.
+    std::atomic<bool> stop_sync{false};
+    std::atomic<bool> switching{false};
+    std::thread sync_thread;
+    if (sync && !view_only) {
+        sync->attach(*store);
+        sync->push(*store);
+        sync_thread = std::thread([&] {
+            while (!stop_sync) {
+                for (int i = 0; i < 50 && !stop_sync; ++i) Sleep(100);
+                if (stop_sync) break;
+                try {
+                    sync->tick(*store);
+                } catch (const std::exception&) {
+                }
+            }
+        });
+    }
+
     AppServer server(*store, load_asset);
+    LocationHooks hooks;
+    hooks.read_only_reason = [&]() -> std::string {
+        if (switching) return "Inventory Manager is restarting to switch its data location.";
+        return sync ? sync->read_only_reason() : std::string();
+    };
+    hooks.status = [&]() -> json {
+        json s = sync ? sync->status()
+                      : json{{"mode", "local"}, {"working_copy", narrow(db_path.wstring())}, {"read_only", false},
+                             {"read_only_reason", ""}, {"computer", computer}};
+        if (loc.shared && !sync && opt.db.empty()) {
+            s["fallback"] = true;  // shared folder chosen but unavailable at startup
+            s["folder"] = narrow(loc.folder.wstring());
+        }
+        s["notes"] = startup_note;
+        s["local_folder"] = narrow(local_dir.wstring());
+        s["fixed"] = !opt.db.empty();
+        s["switching"] = switching.load();
+        return s;
+    };
+    hooks.inspect = [&](const std::string& path) -> json {
+        std::filesystem::path p(widen(path));
+        if (path.empty() || !p.is_absolute()) throw ApiError("Choose a folder (a full path, like G:\\My Drive\\Inventory)");
+        json info = inspect_folder(p);
+        std::error_code ec;
+        info["is_current"] = sync && std::filesystem::equivalent(p, sync->folder(), ec);
+        return info;
+    };
+    hooks.change = [&](const json& body) -> json {
+        if (!opt.db.empty() || !opt.shared.empty()) throw ApiError("The data location is fixed by how Inventory Manager was started.");
+        if (!body.is_object()) throw ApiError("Invalid request");
+        std::string mode = body.value("mode", ""), use = body.value("use", "");
+        std::error_code ec;
+        if (mode == "shared") {
+            std::filesystem::path folder(widen(body.value("path", "")));
+            if (folder.empty() || !folder.is_absolute()) throw ApiError("Choose a folder");
+            json info = inspect_folder(folder);
+            if (!info.value("exists", false)) throw ApiError("That folder doesn't exist.");
+            if (!info.value("writable", false)) throw ApiError("Inventory Manager can't save files in that folder.");
+            auto rel = std::filesystem::relative(folder, local_dir, ec);
+            if (!ec && !rel.empty() && rel.native().rfind(L"..", 0) != 0)
+                throw ApiError("Choose a folder outside Inventory Manager's own data folder - for example in Google Drive.");
+            const json& lk = info["lock"];
+            if (lk.value("exists", false) && !lk.value("this_computer", false) && !lk.value("stale", false))
+                throw ApiError("The inventory in that folder is open on " + lk.value("computer", std::string("another computer")) +
+                               " right now. Close Inventory Manager there first.");
+            if (sync && std::filesystem::equivalent(folder, sync->folder(), ec)) throw ApiError("This computer already uses that folder.");
+            if (use == "this") {
+                // This computer's inventory becomes the shared one (anything already there is backed up first).
+                if (info.value("has_inventory", false) || info.value("unreadable", false)) {
+                    std::filesystem::create_directories(backups_dir, ec);
+                    std::filesystem::copy_file(folder / L"inventory.db",
+                                               backups_dir / widen("shared-folder-before-replacing-" + now_iso().substr(0, 10) + ".db"),
+                                               std::filesystem::copy_options::overwrite_existing, ec);
+                }
+                if (sync) sync->shutdown(*store);
+                long long gen = publish_inventory(*store, folder, local_dir, computer);
+                // The working copy for the new folder is this same data, already in sync.
+                if (!sync) {
+                    std::filesystem::create_directories(cache_dir, ec);
+                    store->backup_to(narrow((cache_dir / L"inventory.db").wstring()));
+                }
+                write_sync_state(cache_dir, folder, gen, false);
+            } else if (use == "folder") {
+                if (!info.value("has_inventory", false)) throw ApiError("There's no inventory in that folder yet.");
+                if (sync) sync->shutdown(*store);
+                write_sync_state(cache_dir, folder, -1, false);  // load the folder's inventory on restart
+            } else {
+                throw ApiError("Choose which inventory to use");
+            }
+            DataLocation{true, folder}.save();
+        } else if (mode == "local") {
+            if (!sync && !loc.shared) throw ApiError("This computer already keeps its own data.");
+            if (use == "this" && sync) {
+                // Bring the shared inventory's current contents to this computer (keeping the old local data as a backup).
+                std::filesystem::path local_db = local_dir / L"inventory.db";
+                if (std::filesystem::exists(local_db, ec)) {
+                    std::filesystem::create_directories(backups_dir, ec);
+                    std::filesystem::copy_file(local_db, backups_dir / widen("this-computer-before-switching-" + now_iso().substr(0, 10) + ".db"),
+                                               std::filesystem::copy_options::overwrite_existing, ec);
+                }
+                store->backup_to(narrow(local_db.wstring()));
+                std::filesystem::path journal = local_db;
+                journal += L"-journal";
+                std::filesystem::remove(journal, ec);
+            }
+            if (sync) sync->shutdown(*store);
+            DataLocation{}.save();
+        } else {
+            throw ApiError("Unknown data location");
+        }
+        switching = true;
+        return {{"ok", true}, {"restart", true}};
+    };
+    hooks.sync_now = [&]() -> json {
+        if (!sync) return {{"ok", true}};
+        bool ok = sync->push(*store, false);
+        json s = sync->status();
+        s["ok"] = ok;
+        return s;
+    };
+    hooks.changed = [&] {
+        if (sync) sync->note_change();
+    };
+    server.set_location_hooks(hooks);
     int port = server.start(narrow(opt.host), opt.port);
     if (port <= 0) {
         if (!opt.headless)
@@ -477,6 +750,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     }
 
     server.stop();
+    stop_sync = true;
+    if (sync_thread.joinable()) sync_thread.join();
+    if (sync) sync->shutdown(*store);  // final save to the shared folder, and free it for other computers
     store.reset();
     CoUninitialize();
     if (mutex) {

@@ -42,7 +42,14 @@ public:
 
     // Backups: complete copies of the database file.
     std::string data_path() const { return path_; }
-    std::string backups_dir() const;           // "Backups" folder next to the database
+    std::string backups_dir() const;           // "Backups" folder (next to the database unless set)
+    void set_backups_dir(const std::string& dir_utf8) { backups_dir_ = dir_utf8; }
+    void backup_to(const std::string& path_utf8);  // consistent copy of the whole database
+
+    // For syncing with a shared folder.
+    long long change_count();                  // grows with every change made through this Store
+    std::string get_meta(const std::string& key);
+    void set_meta(const std::string& key, const std::string& value);
     std::string backup_bytes();                // a consistent copy of the whole database
     json list_backups();                       // files in the Backups folder, newest first
     // Replaces everything with the backup's contents, after saving a safety copy. Returns item count.
@@ -61,9 +68,9 @@ public:
 
 private:
     void ensure_schema();
-    void backup_to(const std::string& path_utf8);
 
     std::string path_;
+    std::string backups_dir_;
     sqlite3* db_ = nullptr;
     std::recursive_mutex mutex_;
 };

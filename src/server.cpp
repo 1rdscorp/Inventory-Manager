@@ -102,10 +102,23 @@ void AppServer::routes() {
             send_json(res, {{"error", "Missing request header"}}, 403);
             return httplib::Server::HandlerResponse::Handled;
         }
+        // View-only (shared inventory open on another computer): only reading and switching location are allowed.
+        if (req.path.rfind("/api/", 0) == 0 && req.method != "GET" && req.path != "/api/data-location" &&
+            req.path != "/api/sync" && hooks_.read_only_reason) {
+            std::string why = hooks_.read_only_reason();
+            if (!why.empty()) {
+                send_json(res, {{"error", why}, {"read_only", true}}, 423);
+                return httplib::Server::HandlerResponse::Handled;
+            }
+        }
         return httplib::Server::HandlerResponse::Unhandled;
     });
-    s.set_post_routing_handler([](const httplib::Request&, httplib::Response& res) {
+    s.set_post_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
         res.set_header("X-Content-Type-Options", "nosniff");
+        if (hooks_.changed && req.method != "GET" && res.status < 400 && req.path.rfind("/api/", 0) == 0 &&
+            req.path != "/api/sync" && req.path != "/api/data-location" && req.path != "/api/open-folder" &&
+            req.get_param_value("dry_run") != "1")
+            hooks_.changed();
     });
 
     using Handler = std::function<void(const httplib::Request&, httplib::Response&)>;
@@ -200,6 +213,22 @@ void AppServer::routes() {
         res.set_header("Content-Disposition", std::string(type != inline_types.end() ? "inline" : "attachment") +
                                                   "; filename=\"" + ascii_name + "\"; filename*=UTF-8''" + encoded);
         res.set_content(bytes, type != inline_types.end() ? type->second : "application/octet-stream");
+    }));
+
+    // ---- data location (this computer or a shared folder such as Google Drive)
+    s.Get("/api/data-location", safe([this](const httplib::Request&, httplib::Response& res) {
+        send_json(res, hooks_.status ? hooks_.status() : json{{"mode", "local"}, {"read_only", false}});
+    }));
+    s.Get("/api/data-location/check", safe([this](const httplib::Request& req, httplib::Response& res) {
+        if (!hooks_.inspect) throw ApiError("Not available");
+        send_json(res, hooks_.inspect(req.get_param_value("path")));
+    }));
+    s.Post("/api/data-location", safe([this](const httplib::Request& req, httplib::Response& res) {
+        if (!hooks_.change) throw ApiError("Changing the data location isn't available here");
+        send_json(res, hooks_.change(parse_json_body(req)));
+    }));
+    s.Post("/api/sync", safe([this](const httplib::Request&, httplib::Response& res) {
+        send_json(res, hooks_.sync_now ? hooks_.sync_now() : json{{"ok", true}});
     }));
 
     // ---- settings, backups, app info

@@ -28,6 +28,7 @@
     <button type="button" class="tab" data-view="activity">Activity</button>
   </nav>
   <div class="top-actions">
+    <button type="button" class="sync-chip" id="syncChip" hidden title="Data location — click for details"></button>
     <button type="button" class="btn" id="importBtn">
       <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m0 0l-3.5-3.5M10 12l3.5-3.5M4 14v2h12v-2"/></svg>Import
     </button>
@@ -47,6 +48,7 @@
 </header>
 
 <main>
+  <div class="banner" id="syncBanner" role="status" hidden></div>
   <!-- ============ Inventory ============ -->
   <section class="view" id="view-inventory">
     <div class="toolbar">
@@ -316,6 +318,15 @@
     </header>
     <div class="dlg-body settings">
       <section>
+        <h3>Data location</h3>
+        <div class="loc-summary" id="locSummary">…</div>
+        <div class="settings-actions">
+          <button type="button" class="btn btn-sm" data-action="loc-choose" id="locChooseBtn">Use a shared folder…</button>
+          <button type="button" class="btn btn-sm" data-action="loc-local" id="locLocalBtn" hidden>Keep data on this computer only…</button>
+          <button type="button" class="btn btn-sm" data-action="sync-now" id="syncNowBtn" hidden>Save to shared folder now</button>
+        </div>
+      </section>
+      <section>
         <h3>Display</h3>
         <div class="form-grid">
           <label class="field c6"><span>Currency</span><select name="currency" id="setCurrency"></select></label>
@@ -428,6 +439,75 @@
     <footer class="dlg-foot">
       <span class="spacer"></span>
       <button type="submit" class="btn btn-primary">Close</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- ============ Shared folder ============ -->
+<dialog class="dlg" id="locationDialog" aria-labelledby="locationTitle">
+  <form id="locationForm" novalidate>
+    <header class="dlg-head">
+      <h2 id="locationTitle">Share the inventory between computers</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Close">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+      </button>
+    </header>
+    <div class="dlg-body">
+      <p class="muted">Choose a folder that syncs between your computers, for example a folder in <b>Google Drive</b> such as <span class="mono">G:\My Drive\Inventory Manager</span>. Then choose the same folder in Inventory Manager on each of your other computers.</p>
+      <label class="field">
+        <span>Shared folder</span>
+        <div class="input-action">
+          <input id="locPath" autocomplete="off" spellcheck="false" placeholder="G:\My Drive\Inventory Manager">
+          <button type="button" class="btn btn-sm" id="locBrowse" hidden>Browse…</button>
+        </div>
+      </label>
+      <div class="loc-check" id="locCheck" hidden></div>
+      <fieldset class="radio-list" id="locChoice" hidden>
+        <legend class="sr-only">Which inventory to use</legend>
+        <label><input type="radio" name="locUse" value="folder" checked><span id="locUseFolder"></span></label>
+        <label><input type="radio" name="locUse" value="this"><span id="locUseThis"></span></label>
+      </fieldset>
+      <details class="how">
+        <summary>How sharing works</summary>
+        <ul>
+          <li>Each computer works on its own copy and saves it to the shared folder a few seconds after each change, and when Inventory Manager closes. Google Drive then syncs it to your other computers.</li>
+          <li>Only <b>one computer at a time</b> can make changes. If the inventory is already open on another computer, you can look at it <i>view only</i>.</li>
+          <li>If two computers ever save over each other, nothing is overwritten silently: the other changes are kept in the Backups folder and you're told.</li>
+          <li>Close Inventory Manager on one computer and wait for Google Drive to finish syncing before opening it on another.</li>
+        </ul>
+      </details>
+      <div class="form-error" id="locError" role="alert" hidden></div>
+    </div>
+    <footer class="dlg-foot">
+      <span class="spacer"></span>
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="submit" class="btn btn-primary" id="locSubmit" disabled>Use this folder</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- ============ Back to this computer only ============ -->
+<dialog class="dlg" id="localDialog" aria-labelledby="localTitle">
+  <form id="localForm" novalidate>
+    <header class="dlg-head">
+      <h2 id="localTitle">Keep the inventory on this computer only</h2>
+      <button type="button" class="icon-btn" data-close aria-label="Close">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+      </button>
+    </header>
+    <div class="dlg-body">
+      <p class="muted">This computer will stop using the shared folder. The shared folder and the other computers aren't changed.</p>
+      <fieldset class="radio-list">
+        <legend class="sr-only">Which inventory to keep</legend>
+        <label><input type="radio" name="localUse" value="this" checked><span><b>Keep the current shared inventory</b> — copy it to this computer (recommended)</span></label>
+        <label><input type="radio" name="localUse" value="local"><span><b>Go back to this computer's earlier inventory</b> — from before it used the shared folder</span></label>
+      </fieldset>
+      <div class="form-error" id="localError" role="alert" hidden></div>
+    </div>
+    <footer class="dlg-foot">
+      <span class="spacer"></span>
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="submit" class="btn btn-primary">Switch and restart</button>
     </footer>
   </form>
 </dialog>

@@ -427,7 +427,28 @@ json Store::save_settings(const json& changes) {
 
 // ------------------------------------------------------------------ backup & restore
 
-std::string Store::backups_dir() const { return path_utf8(u8path(path_).parent_path() / "Backups"); }
+std::string Store::backups_dir() const {
+    return backups_dir_.empty() ? path_utf8(u8path(path_).parent_path() / "Backups") : backups_dir_;
+}
+
+long long Store::change_count() {
+    std::lock_guard lock(mutex_);
+    return sqlite3_total_changes64(db_);
+}
+
+std::string Store::get_meta(const std::string& key) {
+    std::lock_guard lock(mutex_);
+    Stmt s(db_, "SELECT value FROM meta WHERE key = ?");
+    s.bind(1, key);
+    return s.step() ? s.text(0) : std::string();
+}
+
+void Store::set_meta(const std::string& key, const std::string& value) {
+    std::lock_guard lock(mutex_);
+    Stmt s(db_, "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    s.bind(1, key).bind(2, value);
+    s.step();
+}
 
 void Store::backup_to(const std::string& dest_utf8) {
     std::lock_guard lock(mutex_);

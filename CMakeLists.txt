@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(InventoryManager VERSION 2.2.0 LANGUAGES C CXX)
+project(InventoryManager VERSION 2.3.0 LANGUAGES C CXX)
 
 if(NOT MSVC)
   message(FATAL_ERROR "Build with the Microsoft C++ compiler (run build.bat, or use a Visual Studio developer prompt).")
@@ -65,6 +65,7 @@ set_source_files_properties("${CMAKE_BINARY_DIR}/resources.rc" PROPERTIES OBJECT
 add_executable(InventoryManager WIN32
   src/main.cpp
   src/server.cpp
+  src/shared.cpp
   src/spreadsheet.cpp
   src/store.cpp
   src/util.cpp
@@ -76,7 +77,7 @@ target_compile_definitions(InventoryManager PRIVATE
   APP_VERSION="${PROJECT_VERSION}")
 target_compile_options(InventoryManager PRIVATE /W4 /utf-8 /permissive- /wd4100)
 target_link_libraries(InventoryManager PRIVATE thirdparty
-  "${WEBVIEW2_DIR}/x64/WebView2LoaderStatic.lib" ws2_32 version shlwapi)
+  "${WEBVIEW2_DIR}/x64/WebView2LoaderStatic.lib" ws2_32 version shlwapi comctl32)
 
 # Put the starter spreadsheet next to the .exe so a first run imports it.
 add_custom_command(TARGET InventoryManager POST_BUILD
